@@ -1,0 +1,9 @@
+[dot]
+name = "webdesserts"
+authors = [ "Michael Mullins <michael@webdesserts.com>" ]
+
+[links]
+bashrc = "$XDG_CONFIG_HOME/bashrc"
+bash_profile = "$XDG_CONFIG_HOME/bash_profile"
+Brewfile = "~/.Brewfile"
+
