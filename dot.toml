@@ -1,4 +1,4 @@
-[dot]
+[package]
 name = "webdesserts"
 authors = [ "Michael Mullins <michael@webdesserts.com>" ]
 
@@ -6,4 +6,3 @@ authors = [ "Michael Mullins <michael@webdesserts.com>" ]
 bashrc = "$XDG_CONFIG_HOME/bashrc"
 bash_profile = "$XDG_CONFIG_HOME/bash_profile"
 Brewfile = "~/.Brewfile"
-
