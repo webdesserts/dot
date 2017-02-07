@@ -1,6 +1,5 @@
 tap 'homebrew/bundle'
 tap 'homebrew/core'
-tap 'neovim/neovim'
 brew 'mas'
 brew 'coreutils'
 brew 'findutils'
@@ -17,7 +16,6 @@ brew 'mas'
 brew 'readline'
 brew 'ssh-copy-id'
 brew 'tree'
-brew 'neovim'
 cask 'dropbox'
 mas 'ScreenFlow', id: 917790450
 mas 'Affinity Designer', id: 824171161
