@@ -1,8 +1,0 @@
-{
-  "name": "webdesserts",
-  "authors": [ "Michael Mullins <michael@webdesserts.com>" ],
-  "link": {
-    "bashrc": "~/.bashrc",
-    "bash_profile": "~/.bash_profile"
-  }
-}
