@@ -17,6 +17,7 @@ brew 'readline'
 brew 'ssh-copy-id'
 brew 'tree'
 cask 'dropbox'
+cask 'github-desktop'
 mas 'ScreenFlow', id: 917790450
 mas 'Affinity Designer', id: 824171161
 mas '1Password', id: 443987910
