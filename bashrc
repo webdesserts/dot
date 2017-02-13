@@ -81,3 +81,9 @@ fi
 if exists hub; then
   eval "$(hub alias -s)"
 fi
+
+if exists dots; then
+  if private_dots=$(dots prefix webdesserts-private); then
+    source $private_dots/bashrc.vix
+  fi
+fi
