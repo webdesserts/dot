@@ -17,7 +17,7 @@
 # The bashrc contains all config for non-login interactive bash sessions. For
 # login sessions, see the .bash_profile instead.
 
-export $XDG_CONFIG_HOME=~/.config
+export XDG_CONFIG_HOME=~/.config
 
 config="${XDG_CONFIG_HOME}"
 base="$config/dots"
@@ -29,19 +29,19 @@ platform=$(uname)
 
 # Add things to the PATH here
 export PATH=~/bin:\
+~/.cargo/bin:\
 /usr/local/bin:\
 $PATH
 
 if [ "$platform" == "Darwin" ]; then
-  export PATH=/usr/local/opt/coreutils/libexec/gnubin:\
-  $PATH
 
-  export MANPATH=/usr/local/opt/coreutils/libexec/gnuman:\
-  $MANPATH
-elif [ "$platform" == "Linux" ]; then
+export PATH=/usr/local/opt/coreutils/libexec/gnubin:\
+$PATH
+
+export MANPATH=/usr/local/opt/coreutils/libexec/gnuman:\
+$MANPATH
+
 fi
-
-
 
   #======================#
  # Personal Preferences #
