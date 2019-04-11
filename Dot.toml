@@ -6,3 +6,4 @@ authors = [ "Michael Mullins <michael@webdesserts.com>" ]
 bashrc = "~/.bashrc"
 bash_profile = "~/.bash_profile"
 editorconfig = "~/.editorconfig"
+"sysctl.conf" = "/etc/sysctl.conf"

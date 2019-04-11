@@ -31,6 +31,7 @@ platform=$(uname)
 export PATH=~/bin:\
 ~/.cargo/bin:\
 /usr/local/bin:\
+/usr/local/opt/python/libexec/bin:\
 $PATH
 
 if [ "$platform" == "Darwin" ]; then
@@ -57,7 +58,11 @@ blue='\[\e[0;34m\]'
 purple='\[\e[0;35m\]'
 cyan='\[\e[0;36m\]'
 white='\[\e[0;37m\]'
-PS1="${cyan}\u${reset}@${red}\h\n ${blue}\w${reset}> "
+PS1="${red}\u${reset}@${red}\h\n ${reset}\w> "
+
+
+export RUST_SRC_PATH=/usr/local/src/rust/src
+export EQUIS_DIR=$config/equis
 
   #=================#
  # Helpful Scripts #
@@ -65,7 +70,6 @@ PS1="${cyan}\u${reset}@${red}\h\n ${blue}\w${reset}> "
 
 exists() { command -v "$1" >/dev/null 2>&1; }
 weather() { curl -4 http://wttr.in/"$1"; }
-export EQUIS_DIR=$config/equis
 x() { source ~/code/equis/equis.sh "$@"; }
 
 
