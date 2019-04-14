@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+# Subcommand management pulled from https://gist.github.com/waylan/4080362
+
+vscode_help () {
+  echo "vscode [SUBCOMMAND]
+  bundle    Installs all extensions in the bundle
+  cleanup   Removes any extensions that are not in the bundle
+  dump      Adds any extensions that are not listed to the bundle
+  "
+}
+
+vscode_bundle () {
+  if exists dots; then
+    if dots=$(dots prefix webdesserts); then
+      comm -23 <(cat $dots/vscodefile | sort) <(code --list-extensions | sort) \
+        | cat | xargs -L1 code --install-extension
+    else
+      echo "[ERROR] Can't find \"webdesserts\" dot" 1>&2
+      exit 1
+    fi
+  else
+    echo "[ERROR] Can't find dots command" 1>&2
+    exit 1
+  fi
+}
+
+vscode_cleanup () {
+  if exists dots; then
+    if dots=$(dots prefix webdesserts); then
+      comm -13 <(cat $dots/vscodefile | sort) <(code --list-extensions | sort) \
+      | xargs -L1 code --uninstall-extension
+    else
+      echo "[ERROR] Can't find \"webdesserts\" dot" 1>&2
+      exit 1
+    fi
+  else
+    echo "[ERROR] Can't find dots command" 1>&2
+    exit 1
+  fi
+}
+
+vscode_dump () {
+  if exists dots; then
+    if dots=$(dots prefix webdesserts); then
+      comm -13 <(cat $dots/vscodefile | sort) <(code --list-extensions | sort) \
+      | sort | tee -a $dots/vscodefile
+      echo "extensions saved to $dots/vscodefile"
+    else
+      echo "[ERROR] Can't find \"webdesserts\" dot" 1>&2
+      exit 1
+    fi
+  else
+    echo "[ERROR] Can't find dots command" 1>&2
+    exit 1
+  fi
+}
+
+subcommand=$1
+case $subcommand in
+    "" | "-h" | "--help")
+        vscode_help
+        ;;
+    *)
+        shift
+        vscode_${subcommand} $@
+        if [ $? = 127 ]; then
+            echo "Error: '$subcommand' is not a known subcommand." >&2
+            echo "       Run '$ProgName --help' for a list of known subcommands." >&2
+            exit 1
+        fi
+        ;;
+esac
