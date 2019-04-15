@@ -1,0 +1,77 @@
+// Place your key bindings in this file to overwrite the defaults
+[
+  {
+    "key": "ctrl+q",
+    "command": "extension.vim_ctrl+v",
+    "when": "editorTextFocus && vim.active && vim.use<C-v> && !inDebugRepl && vim.mode != 'Insert'"
+  },
+  {
+    "key": "ctrl+v",
+    "command": "-extension.vim_ctrl+v",
+    "when": "editorTextFocus && vim.active && vim.use<C-v> && !inDebugRepl && vim.mode != 'Insert'"
+  },
+  // Sidebar Stuff
+  {
+    "key": "cmd+b",
+    "command": "-workbench.action.toggleSidebarVisibility"
+  },
+  {
+    "key": "cmd+0",
+    "command": "-workbench.action.focusSideBar"
+  },
+  {
+    "key": "cmd+\\",
+    "command": "-workbench.action.splitEditor"
+  },
+  {
+    "key": "cmd+\\",
+    "command": "workbench.files.action.showActiveFileInExplorer",
+    "when": "!explorerViewletVisible"
+  },
+  {
+    "key": "cmd+\\",
+    "command": "workbench.files.action.focusFilesExplorer",
+    "when": "!explorerViewletFocus"
+  },
+  {
+    "key": "cmd+\\",
+    "command": "workbench.action.toggleSidebarVisibility",
+    "when": "explorerViewletVisible && explorerViewletFocus"
+  },
+  {
+    "key": "cmd+\\",
+    "command": "workbench.action.toggleSidebarVisibility",
+    "when": "sidebarVisible && !explorerViewletVisible"
+  },
+  {
+    "key": "o",
+    "command": "list.select",
+    "when": "explorerViewletVisible && explorerViewletFocus && !inputFocus"
+  },
+  // Custom Vim Commands
+  {
+    "key": ", z",
+    "command": "workbench.action.toggleZenMode",
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", p",
+    "command": "workbench.action.showCommands",
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", v",
+    "command": "workbench.view.scm",
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", e",
+    "command": "workbench.view.extensions",
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", r",
+    "command": "editor.action.rename",
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && editorHasRenameProvider && !editorReadonly"
+  }
+]
