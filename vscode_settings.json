@@ -1,0 +1,35 @@
+{
+  "editor.tabSize": 3,
+  "editor.wordBasedSuggestions": false,
+  "editor.minimap.maxColumn": 80,
+  "editor.minimap.renderCharacters": false,
+  "editor.minimap.enabled": false,
+
+  "vim.enableNeovim": true,
+  "vim.neovimPath": "/usr/local/bin/nvim",
+
+  "window.zoomLevel": 1,
+
+  "sassFormat.indent": 2,
+
+  "javascript.updateImportsOnFileMove.enabled": "always",
+
+  "typescript.updateImportsOnFileMove.enabled": "always",
+
+  "explorer.confirmDragAndDrop": false,
+
+  "workbench.activityBar.visible": false,
+  "workbench.colorTheme": "Dracula Soft",
+  "workbench.panel.defaultLocation": "right",
+
+  "importCost.mediumPackageColor": "#7b7f8b",
+  "importCost.smallPackageColor": "#7b7f8b",
+  "importCost.largePackageColor": "#7b7f8b",
+  "importCost.bundleSizeDecoration": "gzipped",
+
+  "terminal.external.osxExec": "iTerm.app",
+  "terminal.integrated.enableBell": true,
+  "[typescriptreact]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
+}
