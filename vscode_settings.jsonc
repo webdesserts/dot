@@ -29,14 +29,14 @@
 
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
-  "[typescriptreact]": {
-      "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[typescript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescriptreact]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "workbench.iconTheme": null,
   "rust-client.updateOnStartup": true
