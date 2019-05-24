@@ -70,8 +70,13 @@ export EQUIS_DIR=$config/equis
 
 exists() { command -v "$1" >/dev/null 2>&1; }
 weather() { curl -4 http://wttr.in/"$1"; }
-x() { source ~/code/equis/equis.sh "$@"; }
-
+p() {
+  if [ -z "$@" ]; then
+    cd `projects`;
+  else
+    eval "projects $@";
+  fi
+}
 
   #=========#
  # Aliases #
