@@ -38,5 +38,6 @@
   "[typescript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "workbench.iconTheme": null
+  "workbench.iconTheme": null,
+  "rust-client.updateOnStartup": true
 }
