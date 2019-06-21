@@ -23,6 +23,7 @@ brew 'ssh-copy-id'
 brew 'tree'
 brew 'yarn'
 brew 'neovim'
+brew 'n'
 
 cask 'iterm2'
 cask 'dropbox'
