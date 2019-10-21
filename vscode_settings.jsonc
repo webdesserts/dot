@@ -45,5 +45,7 @@
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "workbench.iconTheme": null,
-  "rust-client.updateOnStartup": true
+  "rust-client.updateOnStartup": true,
+  "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
+  "editor.fontLigatures": true
 }
