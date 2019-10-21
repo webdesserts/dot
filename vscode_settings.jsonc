@@ -10,8 +10,6 @@
 
   "window.zoomLevel": 1,
 
-  "sassFormat.indent": 2,
-
   "javascript.updateImportsOnFileMove.enabled": "always",
 
   "typescript.updateImportsOnFileMove.enabled": "always",
