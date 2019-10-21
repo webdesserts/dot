@@ -48,21 +48,43 @@ fi
  # Personal Preferences #
 #======================#
 
-# Bash Prompt
-reset='\[\e[0m\]'
-black='\[\e[0;30m\]'
-red='\[\e[0;31m\]'
-green='\[\e[0;32m\]'
-yellow='\[\e[0;33m\]'
-blue='\[\e[0;34m\]'
-purple='\[\e[0;35m\]'
-cyan='\[\e[0;36m\]'
-white='\[\e[0;37m\]'
-PS1="${red}\u${reset}@${red}\h\n ${reset}\w> "
+reset=$(tput sgr0)
+bold=$(tput bold)
+dim=$'\e[2m'
+italic=$'\e[3m'
+newline=$'\n'
+black=$(tput setaf 0)
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+yellow=$(tput setaf 3)
+blue=$(tput setaf 4)
+magenta=$(tput setaf 5)
+cyan=$(tput setaf 6)
+white=$(tput setaf 7)
 
+zsh_prompt () {
+  local bar="${magenta}▍ ${reset}"
+  local name_and_host="${bold}%n@%m${reset}"
+  local path="%~"
+  local pointer="»"
+  PS1="${newline}${bar}${name_and_host}${newline}${bar}${path}${pointer} "
+}
+
+bash_prompt () { 
+  local bar="${magenta}▍ ${reset}"
+  local name_and_host="${bold}\u@\h${reset}"
+  local path="\w"
+  local pointer="»"
+  PS1="${newline}${bar}${name_and_host}${newline}${bar}${path}${pointer} "
+}
+
+if [ -n "$ZSH_VERSION" ]; then
+  zsh_prompt
+elif [ -n "$BASH_VERSION" ]; then
+  bash_prompt
+fi
 
 export RUST_SRC_PATH=/usr/local/src/rust/src
-export EQUIS_DIR=$config/equis
 
   #=================#
  # Helpful Scripts #
@@ -72,7 +94,8 @@ exists() { command -v "$1" >/dev/null 2>&1; }
 weather() { curl -4 http://wttr.in/"$1"; }
 p() {
   if [ -z "$@" ]; then
-    cd `projects`;
+    local project=$(projects)
+    [[ ! -z "$project" ]] && cd $project
   else
     eval "projects $@";
   fi

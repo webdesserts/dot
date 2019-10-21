@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+
+emulate -L bash
+[[ -e ~/.bashrc ]] && source ~/.bashrc
