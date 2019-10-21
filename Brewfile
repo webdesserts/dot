@@ -28,16 +28,15 @@ brew 'n'
 cask 'iterm2'
 cask 'dropbox'
 cask 'figma'
+cask 'google-chrome'
 cask 'firefox'
 cask 'firefox-nightly'
 cask 'github'
 cask 'obs'
-cask 'slack'
 cask 'spotify'
 cask 'visual-studio-code'
 cask '1password'
 cask '1password-cli'
-cask 'discord'
 
 mas 'Affinity Designer', id: 824171161
 mas 'Giphy Capture', id: 668208984
