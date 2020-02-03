@@ -6,7 +6,7 @@
   # pull from remote regularly without litering your history with merge commits
   rebase = true
 [format]
-  pretty = "%C(reverse)  %h %n%Creset  %C(bold)%s%Creset %C(#8F8D91)%d%Creset%n%C(magenta) %Creset %C(#8F8D91)%an committed %C(italic)%cr%Creset%n%w(80, 2, 2)%b"
+  pretty = "%C(reverse)  %h %Creset%C(#8F8D91)%d%Creset%n  %C(bold)%s%Creset%n  %C(#8F8D91)%an committed %C(italic)%cr%Creset%n%w(80, 2, 2)%b"
 [filter "lfs"]
   required = true
   clean = git-lfs clean -- %f
