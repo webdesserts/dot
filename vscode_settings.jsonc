@@ -8,7 +8,7 @@
   "vim.enableNeovim": true,
   "vim.neovimPath": "/usr/local/bin/nvim",
 
-  "window.zoomLevel": 1,
+  "window.zoomLevel": 0,
 
   "javascript.updateImportsOnFileMove.enabled": "always",
 
@@ -17,7 +17,7 @@
   "explorer.confirmDragAndDrop": false,
 
   "workbench.activityBar.visible": false,
-  "workbench.colorTheme": "Dracula Soft",
+  "workbench.colorTheme": "GitHub Sharp",
   "workbench.panel.defaultLocation": "right",
 
   "importCost.mediumPackageColor": "#7b7f8b",
