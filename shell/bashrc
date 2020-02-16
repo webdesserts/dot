@@ -65,12 +65,13 @@ white=$(tput setaf 7)
 zsh_prompt () {
   local bar="${magenta}▍ ${reset}"
   local name_and_host="${bold}%n@%m${reset}"
-  local path="%~"
+  local path="%2d"
   local pointer="»"
   PS1="${newline}${bar}${name_and_host}${newline}${bar}${path}${pointer} "
 }
 
 bash_prompt () { 
+  PROMPT_DIRTRIM=2 # only display two directories with \w
   local bar="${magenta}▍ ${reset}"
   local name_and_host="${bold}\u@\h${reset}"
   local path="\w"
