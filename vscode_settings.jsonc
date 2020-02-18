@@ -46,5 +46,11 @@
   "workbench.iconTheme": null,
   "rust-client.updateOnStartup": true,
   "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
-  "editor.fontLigatures": true
+  "editor.fontLigatures": true,
+  "terminal.integrated.fontFamily": "monospace",
+  "tslint.packageManager": "yarn",
+  "prettier.requireConfig": true,
+  "workbench.editor.limit.enabled": true,
+  "workbench.editor.limit.value": 5,
+  "workbench.editor.limit.perEditorGroup": true
 }
