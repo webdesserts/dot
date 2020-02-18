@@ -91,16 +91,9 @@ fi
  # Helpful Scripts #
 #=================#
 
+eval "$(projects init)";
 exists() { command -v "$1" >/dev/null 2>&1; }
 weather() { curl -4 http://wttr.in/"$1"; }
-p() {
-  if [ -z "$@" ]; then
-    local project=$(projects)
-    [[ ! -z "$project" ]] && cd $project
-  else
-    eval "projects $@";
-  fi
-}
 
   #=========#
  # Aliases #
