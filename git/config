@@ -21,3 +21,5 @@
   path="./config_webdesserts"
 [includeIf "gitdir/i:~/code/spatialkey/"]
   path="./config_spatialkey"
+[core]
+	excludesfile = /Users/michael/.gitignore
