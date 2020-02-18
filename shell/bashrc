@@ -87,6 +87,13 @@ elif [ -n "$BASH_VERSION" ]; then
   bash_prompt
 fi
 
+  #=============#
+ # Environment #
+#=============#
+
+export GIT_EDITOR=vim
+export EDITOR=vim
+
   #=================#
  # Helpful Scripts #
 #=================#
