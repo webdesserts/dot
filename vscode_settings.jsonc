@@ -27,6 +27,7 @@
 
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
+  "editor.rulers": [100],
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
