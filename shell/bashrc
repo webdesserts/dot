@@ -98,9 +98,12 @@ export EDITOR=vim
  # Helpful Scripts #
 #=================#
 
-eval "$(projects init)";
 exists() { command -v "$1" >/dev/null 2>&1; }
 weather() { curl -4 http://wttr.in/"$1"; }
+
+if exists projects; then
+  eval "$(projects init bash)";
+fi
 
   #=========#
  # Aliases #
