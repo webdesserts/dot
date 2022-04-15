@@ -2,5 +2,4 @@ brew 'yarn'
 brew 'n'
 
 cask 'zulip'
-cask 'amazon-chime'
 cask java

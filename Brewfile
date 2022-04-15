@@ -30,7 +30,6 @@ cask 'dropbox'
 cask 'figma'
 cask 'google-chrome'
 cask 'firefox'
-cask 'firefox-nightly'
 cask 'github'
 cask 'obs'
 cask 'spotify'
@@ -38,8 +37,6 @@ cask 'visual-studio-code'
 cask '1password'
 cask '1password-cli'
 
-mas 'Affinity Designer', id: 824171161
-mas 'Giphy Capture', id: 668208984
 mas 'iA Writer', id: 775737590
 mas 'DaisyDisk', id: 411643860
 mas 'Trello', id: 1278508951
