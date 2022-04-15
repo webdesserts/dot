@@ -4,7 +4,6 @@ bungcip.better-toml
 clinyong.vscode-css-modules
 dracula-theme.theme-dracula
 esbenp.prettier-vscode
-flowtype.flow-for-vscode
 idleberg.hopscotch
 jkchao.hy-theme
 jpoissonnier.vscode-styled-components
@@ -17,4 +16,9 @@ vscodevim.vim
 waderyan.gitblame
 whizkydee.material-palenight-theme
 wix.vscode-import-cost
-raathigeshan.fabulous
+csstools.postcss
+dbaeumer.vscode-eslint
+golang.go
+joaomoreno.github-sharp-theme
+ms-vscode.vscode-typescript-tslint-plugin
+redhat.vscode-yaml

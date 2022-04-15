@@ -3,12 +3,9 @@
   "editor.wordBasedSuggestions": false,
   "editor.minimap.maxColumn": 80,
   "editor.minimap.renderCharacters": false,
-  "editor.minimap.enabled": false,
 
   "vim.enableNeovim": true,
   "vim.neovimPath": "/usr/local/bin/nvim",
-
-  "window.zoomLevel": 0,
 
   "javascript.updateImportsOnFileMove.enabled": "always",
 
@@ -17,7 +14,6 @@
   "explorer.confirmDragAndDrop": false,
 
   "workbench.activityBar.visible": false,
-  "workbench.colorTheme": "GitHub Sharp",
   "workbench.panel.defaultLocation": "right",
 
   "importCost.mediumPackageColor": "#7b7f8b",
@@ -52,5 +48,13 @@
   "prettier.requireConfig": true,
   "workbench.editor.limit.enabled": true,
   "workbench.editor.limit.value": 5,
-  "workbench.editor.limit.perEditorGroup": true
+  "workbench.editor.limit.perEditorGroup": true,
+  "yaml.schemas": {
+    "file:///Users/michael/.vscode/extensions/atlassian.atlascode-2.4.2/resources/schemas/pipelines-schema.json": "bitbucket-pipelines.yml"
+  },
+  "workbench.colorTheme": "GitHub Sharp",
+  "window.zoomLevel": 1,
+  "terminal.integrated.defaultProfile.osx": "zsh",
+  "editor.minimap.enabled": false,
+  "editor.formatOnSave": true
 }
