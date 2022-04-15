@@ -114,16 +114,17 @@ if exists nvim; then
   alias vi="nvim"
 fi
 
-if exists hub; then
-  eval "$(hub alias -s)"
-fi
+# This currently doesn't work with nushell
+# if exists hub; then
+#   eval "$(hub alias -s)"
+# fi
 
   #============#
  # Other Dots #
 #============#
 
-if exists dots; then
-  if private_dots=$(dots prefix webdesserts-private); then
-    source $private_dots/bashrc.work
-  fi
-fi
+# if exists dots; then
+#   if private_dots=$(dots prefix webdesserts-private); then
+#     source $private_dots/bashrc.work
+#   fi
+# fi
