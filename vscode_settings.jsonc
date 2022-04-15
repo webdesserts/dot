@@ -3,18 +3,26 @@
   "editor.wordBasedSuggestions": false,
   "editor.minimap.maxColumn": 80,
   "editor.minimap.renderCharacters": false,
+  "editor.formatOnSave": true,
+  "editor.minimap.enabled": false,
+  "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
+  "editor.fontLigatures": true,
+  "editor.rulers": [100],
 
   "vim.enableNeovim": true,
   "vim.neovimPath": "/usr/local/bin/nvim",
 
-  "javascript.updateImportsOnFileMove.enabled": "always",
-
-  "typescript.updateImportsOnFileMove.enabled": "always",
-
+  "window.zoomLevel": 1,
+  
   "explorer.confirmDragAndDrop": false,
 
   "workbench.activityBar.visible": false,
+  "workbench.colorTheme": "GitHub Sharp",
   "workbench.panel.defaultLocation": "right",
+  "workbench.editor.limit.enabled": true,
+  "workbench.editor.limit.value": 5,
+  "workbench.editor.limit.perEditorGroup": true,
+  "workbench.iconTheme": null,
 
   "importCost.mediumPackageColor": "#7b7f8b",
   "importCost.smallPackageColor": "#7b7f8b",
@@ -23,7 +31,9 @@
 
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
-  "editor.rulers": [100],
+  "terminal.integrated.fontFamily": "'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
+  "terminal.integrated.defaultProfile.osx": "zsh",
+
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
@@ -39,22 +49,14 @@
   "[css]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "workbench.iconTheme": null,
+
   "rust-client.updateOnStartup": true,
-  "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
-  "terminal.integrated.fontFamily": "'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
-  "editor.fontLigatures": true,
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  "typescript.updateImportsOnFileMove.enabled": "always",
   "tslint.packageManager": "yarn",
   "prettier.requireConfig": true,
-  "workbench.editor.limit.enabled": true,
-  "workbench.editor.limit.value": 5,
-  "workbench.editor.limit.perEditorGroup": true,
   "yaml.schemas": {
     "file:///Users/michael/.vscode/extensions/atlassian.atlascode-2.4.2/resources/schemas/pipelines-schema.json": "bitbucket-pipelines.yml"
   },
-  "workbench.colorTheme": "GitHub Sharp",
-  "window.zoomLevel": 1,
-  "terminal.integrated.defaultProfile.osx": "zsh",
-  "editor.minimap.enabled": false,
-  "editor.formatOnSave": true
+  "git.autofetch": true
 }
