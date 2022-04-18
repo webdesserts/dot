@@ -13,7 +13,7 @@
   "vim.neovimPath": "/usr/local/bin/nvim",
 
   "window.zoomLevel": 1,
-  
+
   "explorer.confirmDragAndDrop": false,
 
   "workbench.activityBar.visible": false,
@@ -32,7 +32,7 @@
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
   "terminal.integrated.fontFamily": "'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
-  "terminal.integrated.defaultProfile.osx": "zsh",
+  "terminal.integrated.defaultProfile.osx": "Nushell",
 
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
