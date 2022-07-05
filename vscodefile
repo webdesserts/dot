@@ -13,7 +13,6 @@ idleberg.hopscotch
 jkchao.hy-theme
 joaomoreno.github-sharp-theme
 jpoissonnier.vscode-styled-components
-matklad.rust-analyzer
 ms-vscode-remote.remote-containers
 ms-vscode.vscode-typescript-tslint-plugin
 raathigeshan.fabulous
@@ -25,3 +24,5 @@ vscodevim.vim
 waderyan.gitblame
 whizkydee.material-palenight-theme
 wix.vscode-import-cost
+GitHub.vscode-pull-request-github
+rust-lang.rust-analyzer
