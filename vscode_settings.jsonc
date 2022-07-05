@@ -54,7 +54,6 @@
   "javascript.updateImportsOnFileMove.enabled": "always",
   "typescript.updateImportsOnFileMove.enabled": "always",
   "tslint.packageManager": "yarn",
-  "prettier.requireConfig": true,
   "yaml.schemas": {
     "file:///Users/michael/.vscode/extensions/atlassian.atlascode-2.4.2/resources/schemas/pipelines-schema.json": "bitbucket-pipelines.yml"
   },
