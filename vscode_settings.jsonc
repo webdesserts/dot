@@ -5,13 +5,12 @@
   "editor.minimap.renderCharacters": false,
   "editor.formatOnSave": true,
   "editor.minimap.enabled": false,
-  "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
+  "editor.fontFamily": "'iA Writer Duo V Regular', 'iA Writer Mono V Regular Regular', Monaco, monospace",
   "editor.fontLigatures": true,
-  "editor.rulers": [100],
-
-  "vim.enableNeovim": true,
+  "editor.rulers": [
+    100
+  ],
   "vim.neovimPath": "/usr/local/bin/nvim",
-
   "window.zoomLevel": 1,
 
   "explorer.confirmDragAndDrop": false,
@@ -31,7 +30,7 @@
 
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
-  "terminal.integrated.fontFamily": "'iA Writer Mono V', Menlo, Monaco, 'Courier New', monospace",
+  "terminal.integrated.fontFamily": "'iA Writer Mono V Regular Regular', Menlo, Monaco, monospace",
   "terminal.integrated.defaultProfile.osx": "Nushell",
 
   "[json]": {
@@ -57,5 +56,6 @@
   "yaml.schemas": {
     "file:///Users/michael/.vscode/extensions/atlassian.atlascode-2.4.2/resources/schemas/pipelines-schema.json": "bitbucket-pipelines.yml"
   },
-  "git.autofetch": true
+  "git.autofetch": true,
+  "editor.fontWeight": "normal"
 }
