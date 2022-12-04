@@ -124,7 +124,7 @@ fi
 #============#
 
 # if exists dots; then
-#   if private_dots=$(dots prefix webdesserts-private); then
+#   if private_dots=$(dots path webdesserts-private); then
 #     source $private_dots/bashrc.work
 #   fi
 # fi

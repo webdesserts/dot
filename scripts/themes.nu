@@ -1,5 +1,5 @@
 # for more information on themes see
-# https://github.com/nushell/nushell/blob/main/docs/How_To_Coloring_and_Theming.md
+# https://www.nushell.sh/book/coloring_and_theming.html
 
 export def desserts [] {
   # As of 0.61.0 it looks like I'm not able to the default keyword directly and instead need to use

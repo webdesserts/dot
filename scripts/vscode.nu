@@ -83,7 +83,7 @@ def webdesserts_dot_path [] {
   use utils [exists]
 
   if (exists dots) {
-    dots prefix webdesserts | output
+    dots path webdesserts | output
   } else { 
     error make { msg: "Cannot find dots command" }
   }
