@@ -30,3 +30,6 @@ let-env NU_LIB_DIRS = [($env.HOME | path join 'scripts')]
 
 # Directories to search for plugin binaries when calling register
 let-env NU_PLUGIN_DIRS = [($env.HOME | path join 'plugins')]
+
+# @todo conditionally include this script
+source ~/scripts/work-env.nu;
