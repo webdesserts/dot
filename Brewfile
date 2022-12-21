@@ -14,7 +14,6 @@ brew 'httpie'
 brew 'python3'
 brew 'python@2', link: false
 brew 'fzf'
-brew 'jq'
 brew 'hub'
 brew 'git'
 brew 'git-lfs'
@@ -39,4 +38,3 @@ cask '1password-cli'
 
 mas 'iA Writer', id: 775737590
 mas 'DaisyDisk', id: 411643860
-mas 'Trello', id: 1278508951
