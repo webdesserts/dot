@@ -43,11 +43,6 @@
     "command": "workbench.action.toggleSidebarVisibility",
     "when": "sidebarVisible && !explorerViewletVisible"
   },
-  {
-    "key": "o",
-    "command": "list.select",
-    "when": "explorerViewletVisible && explorerViewletFocus && !inputFocus"
-  },
   // Custom Vim Commands
   {
     "key": ", z",
@@ -68,6 +63,16 @@
     "key": ", e",
     "command": "workbench.view.extensions",
     "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", o",
+    "command": "outline.focus",
+    "when": "vim.active && vim.mode == 'Normal' && !inDebugRepl"
+  },
+  {
+    "key": ", o",
+    "command": "workbench.action.closeAuxiliaryBar",
+    "when": "auxiliaryBarFocus && view.outline.visible && vim.mode == 'Normal' && !inDebugRepl"
   },
   {
     "key": ", r",
