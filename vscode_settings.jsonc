@@ -4,29 +4,30 @@
   "editor.minimap.maxColumn": 80,
   "editor.minimap.renderCharacters": false,
   "editor.formatOnSave": true,
-  "editor.minimap.enabled": false,
-  "editor.fontFamily": "'iA Writer Duo V Regular', 'iA Writer Mono V Regular Regular', Monaco, monospace",
+  "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, monospace",
   "editor.fontLigatures": true,
+  "editor.fontWeight": "normal",
   "editor.rulers": [
     100
   ],
   "vim.neovimPath": "/usr/local/bin/nvim",
+
   "window.zoomLevel": 1,
 
   "explorer.confirmDragAndDrop": false,
 
-  "workbench.activityBar.visible": false,
   "workbench.colorTheme": "GitHub Sharp",
+  "workbench.preferredDarkColorTheme": "GitHub Sharp Dark",
+  "workbench.preferredLightColorTheme": "GitHub Sharp",
+
+  "workbench.activityBar.visible": false,
   "workbench.panel.defaultLocation": "right",
+  "workbench.iconTheme": null,
   "workbench.editor.limit.enabled": true,
   "workbench.editor.limit.value": 5,
   "workbench.editor.limit.perEditorGroup": true,
-  "workbench.iconTheme": null,
 
-  "importCost.mediumPackageColor": "#7b7f8b",
-  "importCost.smallPackageColor": "#7b7f8b",
-  "importCost.largePackageColor": "#7b7f8b",
-  "importCost.bundleSizeDecoration": "gzipped",
+  "importCost.bundleSizeDecoration": "compressed",
 
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
@@ -52,10 +53,7 @@
   "rust-client.updateOnStartup": true,
   "javascript.updateImportsOnFileMove.enabled": "always",
   "typescript.updateImportsOnFileMove.enabled": "always",
-  "tslint.packageManager": "yarn",
-  "yaml.schemas": {
-    "file:///Users/michael/.vscode/extensions/atlassian.atlascode-2.4.2/resources/schemas/pipelines-schema.json": "bitbucket-pipelines.yml"
-  },
   "git.autofetch": true,
-  "editor.fontWeight": "normal"
+  "emmet.showExpandedAbbreviation": "never",
+  "outline.collapseItems": "alwaysCollapse",
 }
