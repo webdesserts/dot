@@ -62,7 +62,7 @@ export def "vscode bundle" [] {
   let $path = vscode path
   let $extensions = vscode diff --status="new"
 
-  vscode list | append $extensions | save $path
+  vscode list | append $extensions | save --force $path
 
   $extensions
 }
