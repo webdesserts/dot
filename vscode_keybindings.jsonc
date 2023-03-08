@@ -67,7 +67,7 @@
   {
     "key": ", o",
     "command": "outline.focus",
-    "when": "vim.active && vim.mode == 'Normal' && !inDebugRepl"
+    "when": "editorTextFocus && vim.active && vim.mode == 'Normal' && !inDebugRepl"
   },
   {
     "key": ", o",
