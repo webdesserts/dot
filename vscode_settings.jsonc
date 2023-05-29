@@ -7,16 +7,14 @@
   "editor.fontFamily": "'iA Writer Duo V', 'iA Writer Mono V', Menlo, Monaco, monospace",
   "editor.fontLigatures": true,
   "editor.fontWeight": "normal",
-  "editor.rulers": [
-    100
-  ],
+  "editor.rulers": [100],
   "vim.neovimPath": "/usr/local/bin/nvim",
 
   "window.zoomLevel": 1,
 
   "explorer.confirmDragAndDrop": false,
 
-  "workbench.colorTheme": "GitHub Sharp",
+  "workbench.colorTheme": "Default Light+ Experimental",
   "workbench.preferredDarkColorTheme": "GitHub Sharp Dark",
   "workbench.preferredLightColorTheme": "GitHub Sharp",
 
@@ -56,4 +54,6 @@
   "git.autofetch": true,
   "emmet.showExpandedAbbreviation": "never",
   "outline.collapseItems": "alwaysCollapse",
+  "editor.inlineSuggest.enabled": true,
+  "git.openRepositoryInParentFolders": "always"
 }

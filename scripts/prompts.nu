@@ -13,7 +13,7 @@ export def-env "set minimal" [] {
   def create_right_prompt [] {
       let time_segment = ([
           (date now | date format '%m/%d/%Y %r')
-      ] | str collect)
+      ] | str join)
 
       echo $time_segment | ansi gradient --fgend 0xEE5485 --fgstart 0x7562EC
   }

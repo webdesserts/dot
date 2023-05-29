@@ -1,5 +1,7 @@
 # A script for helping manage vscode extensions from a bundle file
-export def vscode [] {}
+export def main [] {
+  help vscode
+}
 
 # Returns the path to the vscodefile
 export def "vscode path" [] {
@@ -15,7 +17,7 @@ export def "vscode list" [--installed: bool] {
     | lines
     | sort-by value
   } else {
-    let $path = vscode path
+    let $path = (vscode path)
     if ($path | path exists) {
       open $path
       | lines
@@ -28,8 +30,8 @@ export def "vscode list" [--installed: bool] {
 
 # Returns a list of installed extensions that aren't in the bundle
 export def "vscode diff" [--status: string] {
-  let $installed = vscode list --installed
-  let $bundled = vscode list
+  let $installed = (vscode list --installed)
+  let $bundled = (vscode list)
 
   let $missing = ($bundled | where (not ($it in $installed)))
   let $new = ($installed | where (not ($it in $bundled)))
@@ -51,16 +53,16 @@ export def "vscode diff" [--status: string] {
 
 # Installs all extensions in the vscodefile
 export def "vscode bundle install" [] {
-  let $path = vscode path
-  let $extensions = vscode diff --status="missing"
+  let $path = (vscode path)
+  let $extensions = (vscode diff --status="missing")
 
   $extensions | each { |extension| code --install-extension $extension }
 }
 
 # Saves a list of all installed extensions in the vscodefile
 export def "vscode bundle" [] {
-  let $path = vscode path
-  let $extensions = vscode diff --status="new"
+  let $path = (vscode path)
+  let $extensions = (vscode diff --status="new")
 
   vscode list | append $extensions | save --force $path
 
@@ -69,8 +71,8 @@ export def "vscode bundle" [] {
 
 # Uninstalls any extensions that aren't in the vscodefile
 export def "vscode bundle clean" [] {
-  let $path = vscode path
-  let $extensions = vscode diff --status="new"
+  let $path = (vscode path)
+  let $extensions = (vscode diff --status="new")
 
   $extensions | each { |extension| code --uninstall-extension $extension }
 }

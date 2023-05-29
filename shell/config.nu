@@ -10,7 +10,7 @@ use ~/scripts/prompts.nu
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
 
-let theme = themes desserts
+let theme = (themes desserts)
 prompts set minimal
 
 # The default config record. This is where much of your global configuration is setup.
