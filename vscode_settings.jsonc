@@ -30,7 +30,7 @@
   "terminal.external.osxExec": "iTerm.app",
   "terminal.integrated.enableBell": true,
   "terminal.integrated.fontFamily": "'iA Writer Mono V Regular Regular', Menlo, Monaco, monospace",
-  "terminal.integrated.defaultProfile.osx": "Nushell",
+  "terminal.integrated.defaultProfile": "nu",
 
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
@@ -55,5 +55,11 @@
   "emmet.showExpandedAbbreviation": "never",
   "outline.collapseItems": "alwaysCollapse",
   "editor.inlineSuggest.enabled": true,
-  "git.openRepositoryInParentFolders": "always"
+  "git.openRepositoryInParentFolders": "always",
+  "terminal.integrated.profiles": {
+    "nu": {
+      "path": "nu",
+      "args": ["-l"]
+    }
+  }
 }
