@@ -14,7 +14,7 @@ let theme = (themes desserts)
 prompts set minimal
 
 # The default config record. This is where much of your global configuration is setup.
-let-env config = {
+$env.config = {
   color_config: $theme
   use_grid_icons: true
   footer_mode: "25" # always, never, number_of_rows, auto

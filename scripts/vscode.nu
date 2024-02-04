@@ -10,7 +10,7 @@ export def "vscode path" [] {
 }
 
 # Returns the current list of extensions
-export def "vscode list" [--installed: bool] {
+export def "vscode list" [--installed] {
   if ($installed) {
     code --list-extensions
     | output
