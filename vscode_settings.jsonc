@@ -1,6 +1,6 @@
 {
   "editor.tabSize": 3,
-  "editor.wordBasedSuggestions": false,
+  "editor.wordBasedSuggestions": "off",
   "editor.minimap.maxColumn": 80,
   "editor.minimap.renderCharacters": false,
   "editor.formatOnSave": true,
@@ -17,8 +17,6 @@
   "workbench.colorTheme": "Default Light+ Experimental",
   "workbench.preferredDarkColorTheme": "GitHub Sharp Dark",
   "workbench.preferredLightColorTheme": "GitHub Sharp",
-
-  "workbench.activityBar.visible": false,
   "workbench.panel.defaultLocation": "right",
   "workbench.iconTheme": null,
   "workbench.editor.limit.enabled": true,
@@ -61,5 +59,6 @@
       "path": "nu",
       "args": ["-l"]
     }
-  }
+  },
+  "workbench.activityBar.location": "hidden"
 }
