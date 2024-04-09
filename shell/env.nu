@@ -33,5 +33,5 @@ $env.NU_LIB_DIRS = [($env.HOME | path join 'scripts')]
 # Directories to search for plugin binaries when calling register
 $env.NU_PLUGIN_DIRS = [($env.HOME | path join 'plugins')]
 
-# @todo conditionally include this script
-# source ~/scripts/work-env.nu;
+const 1password_sock: glob = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+$env.SSH_AUTH_SOCK = $1password_sock
