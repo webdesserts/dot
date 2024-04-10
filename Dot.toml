@@ -1,11 +1,11 @@
 [package]
 name = "webdesserts"
-authors = [ "Michael Mullins <michael@webdesserts.com>" ]
+authors = ["Michael Mullins <michael@webdesserts.com>"]
 
 [link]
 "~/.bashrc" = "shell/bashrc"
-"~/.bash_profile" = "shell/bash_profile" 
-"~/.zshrc" = "shell/zshrc" 
+"~/.bash_profile" = "shell/bash_profile"
+"~/.zshrc" = "shell/zshrc"
 "~/.zprofile" = "shell/zprofile"
 "~/Library/Application Support/nushell/env.nu" = "shell/env.nu"
 "~/Library/Application Support/nushell/config.nu" = "shell/config.nu"

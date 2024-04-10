@@ -2,7 +2,7 @@ export def --env "set minimal" [] {
   const PINK = '#ee5485'
   const PURPLE = '#7562ec'
 
-  def paint [color: string] : string {
+  def paint [color: string] : string -> string {
     $"(ansi { fg: $color, attr: b })($in)(ansi reset)"
   }
 

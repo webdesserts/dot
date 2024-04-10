@@ -1,5 +1,5 @@
 # Nushell Config File
-# Last updated against: 0.72.0
+# Last updated against: 0.92.1
 
 use ~/scripts/utils.nu *
 use ~/scripts/externs.nu *
@@ -10,12 +10,11 @@ use ~/scripts/prompts.nu
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
 
-let theme = (themes desserts)
 prompts set minimal
 
 # The default config record. This is where much of your global configuration is setup.
 $env.config = {
-  color_config: $theme
+  color_config: $themes.desserts
   use_grid_icons: true
   footer_mode: "25" # always, never, number_of_rows, auto
   float_precision: 2

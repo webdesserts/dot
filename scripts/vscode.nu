@@ -1,16 +1,17 @@
+
 # A script for helping manage vscode extensions from a bundle file
 export def main [] {
   help vscode
 }
 
 # Returns the path to the vscodefile
-export def "vscode path" [] {
+export def "vscode path" []: nothing -> string {
   webdesserts_dot_path
     | path join "vscodefile"
 }
 
 # Returns the current list of extensions
-export def "vscode list" [--installed] {
+export def "vscode list" [--installed]: nothing -> list<string> {
   if ($installed) {
     code --list-extensions
     | output
@@ -29,7 +30,7 @@ export def "vscode list" [--installed] {
 }
 
 # Returns a list of installed extensions that aren't in the bundle
-export def "vscode diff" [--status: string] {
+export def "vscode diff" [--status: string]: nothing -> table<name: string, status: string> {
   let $installed = (vscode list --installed)
   let $bundled = (vscode list)
 
@@ -52,7 +53,7 @@ export def "vscode diff" [--status: string] {
 }
 
 # Installs all extensions in the vscodefile
-export def "vscode bundle install" [] {
+export def "vscode bundle install" [] : nothing -> nothing {
   let $path = (vscode path)
   let $extensions = (vscode diff --status="missing")
 
@@ -60,7 +61,7 @@ export def "vscode bundle install" [] {
 }
 
 # Saves a list of all installed extensions in the vscodefile
-export def "vscode bundle" [] {
+export def "vscode bundle" [] : nothing -> table<name: string, status: string> {
   let $path = (vscode path)
   let $extensions = (vscode diff --status="new")
 
@@ -70,19 +71,19 @@ export def "vscode bundle" [] {
 }
 
 # Uninstalls any extensions that aren't in the vscodefile
-export def "vscode bundle clean" [] {
+export def "vscode bundle clean" [] : nothing -> nothing {
   let $path = (vscode path)
   let $extensions = (vscode diff --status="new")
 
   $extensions | each { |extension| code --uninstall-extension $extension }
 }
 
-def output [] {
+def output [] : any -> string {
   complete | get stdout | str trim
 }
 
-def webdesserts_dot_path [] {
-  use utils [exists]
+def webdesserts_dot_path [] : nothing -> string {
+  use utils.nu [exists]
 
   if (exists dots) {
     dots path webdesserts | output
