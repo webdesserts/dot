@@ -53,7 +53,7 @@ export def "vscode diff" [--status: string]: nothing -> table<name: string, stat
 }
 
 # Installs all extensions in the vscodefile
-export def "vscode bundle install" [] : nothing -> nothing {
+export def "vscode bundle install" [] : nothing -> list<any> {
   let $path = (vscode path)
   let $extensions = (vscode diff --status="missing")
 
@@ -71,7 +71,7 @@ export def "vscode bundle" [] : nothing -> table<name: string, status: string> {
 }
 
 # Uninstalls any extensions that aren't in the vscodefile
-export def "vscode bundle clean" [] : nothing -> nothing {
+export def "vscode bundle clean" [] : nothing -> list<any> {
   let $path = (vscode path)
   let $extensions = (vscode diff --status="new")
 

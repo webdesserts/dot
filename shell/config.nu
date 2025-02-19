@@ -12,11 +12,13 @@ alias jp = cd $"(projects list | fzf | str trim)"
 
 prompts set minimal
 
+const work_script_files = "~/scripts/work-scripts.nu"
+source $work_script_files
+
 # The default config record. This is where much of your global configuration is setup.
 $env.config = {
   color_config: $themes.desserts
-  use_grid_icons: true
-  footer_mode: "25" # always, never, number_of_rows, auto
+  footer_mode: 25 # always, never, number_of_rows, auto
   float_precision: 2
   use_ansi_coloring: true
   edit_mode: vi # emacs, vi
@@ -35,8 +37,7 @@ $env.config = {
     always_trash: false
   }
   filesize: {
-    metric: true
-    format: "auto" # b, kb, kib, mb, mib, gb, gib, tb, tib, pb, pib, eb, eib, zb, zib, auto
+    unit: "metric",
   }
   history: {
     max_size: 10000
