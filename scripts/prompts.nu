@@ -8,21 +8,22 @@ export def --env "set minimal" [] {
 
   def create_left_prompt [] {
       let path = ($env.PWD)
-      let user = ($env.USER)
-      let host = (hostname | complete | get stdout | str trim)
+      let home = ($env.HOME)
+      let line2 = ($path | str replace $home '~')
 
-      let line1 = ($"($user)@($host)" | paint $PINK)
-      let line2 = $path
-
-      $"($line1)\n($line2)"
+      $"($line2)"
   }
 
   def create_right_prompt [] {
-      let time_segment = ([
-          (date now | format date '%m/%d/%Y %r')
-      ] | str join)
+      let user = ($env.USER)
+      let host = (hostname | complete | get stdout | str trim)
 
-      echo $time_segment | paint $PURPLE
+      echo $"($user)@($host)" | paint $PINK
+      # let time_segment = ([
+      #     (date now | format date '%m/%d/%Y %r')
+      # ] | str join)
+
+      # echo $time_segment | paint $PURPLE
   }
   
   # Use nushell functions to define your right and left prompt
@@ -31,8 +32,8 @@ export def --env "set minimal" [] {
 
   # The prompt indicators are environmental variables that represent
   # the state of the prompt
-  $env.PROMPT_INDICATOR = "» "
-  $env.PROMPT_INDICATOR_VI_INSERT = "» "
-  $env.PROMPT_INDICATOR_VI_NORMAL = ": "
-  $env.PROMPT_MULTILINE_INDICATOR  = "::: "
+  $env.PROMPT_INDICATOR = " » "
+  $env.PROMPT_INDICATOR_VI_INSERT = " » "
+  $env.PROMPT_INDICATOR_VI_NORMAL = " : "
+  $env.PROMPT_MULTILINE_INDICATOR  = " ::: "
 }

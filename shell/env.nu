@@ -1,12 +1,12 @@
 const paths = [
   ~/.cargo/bin,
   ~/bin,
-  /usr/local/bin
+  ~/usr/local/bin,
 ]
 
 $env.PATH = ( 
   $env.PATH
-  | append $paths
+  | prepend $paths
   | path expand
   | str join (char esep)
  )

@@ -13,7 +13,7 @@
 
   "explorer.confirmDragAndDrop": false,
 
-  "workbench.colorTheme": "Dracula Theme Soft",
+  "workbench.colorTheme": "Ayu Mirage",
   "workbench.preferredDarkColorTheme": "GitHub Sharp Dark",
   "workbench.preferredLightColorTheme": "GitHub Sharp",
   "workbench.panel.defaultLocation": "right",
@@ -66,5 +66,14 @@
   "editor.formatOnSave": true,
   "editor.minimap.enabled": false,
   "diffEditor.hideUnchangedRegions.enabled": true,
-  "editor.formatOnSaveMode": "modificationsIfAvailable"
+  "editor.formatOnSaveMode": "modificationsIfAvailable",
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": false,
+    "scminput": false
+  },
+  "editor.acceptSuggestionOnCommitCharacter": false,
+  "application.shellEnvironmentResolutionTimeout": 30,
+  "github.copilot.nextEditSuggestions.enabled": true
 }
