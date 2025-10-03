@@ -1,5 +1,5 @@
 # Nushell Config File
-# Last updated against: 0.92.1
+# Last updated against: 0.107.0
 
 use ~/scripts/utils.nu *
 use ~/scripts/externs.nu *
