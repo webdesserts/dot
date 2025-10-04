@@ -1,7 +1,8 @@
 const paths = [
-  ~/.cargo/bin,
-  ~/bin,
   /usr/local/bin,
+  ~/bin,
+  ~/.cargo/bin,
+  ~/.local/bin,
 ]
 
 $env.PATH = ( 

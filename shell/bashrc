@@ -28,10 +28,11 @@ platform=$(uname)
 #======#
 
 # Add things to the PATH here
-export PATH=~/bin:\
-~/.cargo/bin:\
+export PATH=\
 /usr/local/bin:\
-/usr/local/opt/python/libexec/bin:\
+~/bin:\
+~/.cargo/bin:\
+~/.local/bin:\
 $PATH
 
 export RUST_SRC_PATH=/usr/local/src/rust/src
