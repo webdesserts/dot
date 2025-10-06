@@ -3,13 +3,10 @@ const paths = [
   ~/bin,
   ~/.cargo/bin,
   ~/.local/bin,
-]
+] | path expand
 
 $env.PATH = ( 
-  $env.PATH
-  | prepend $paths
-  | path expand
-  | str join (char esep)
+  $env.PATH | prepend $paths
  )
 
 $env.EDITOR = 'code -w'
