@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(git fetch:*)",
+      "Bash(git log:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git revert:*)",
+      "Bash(acli bitbucket pr list:*)",
+      "Bash(acli bitbucket pr view:*)",
+      "Bash(acli jira issue view:*)",
+      "Bash(acli jira search:*)",
+      "Bash(acli jira fields:*)",
+      "WebFetch(domain:docs.claude.com)",
+      "WebSearch",
+      "Read(//Users/michael/.claude/**)",
+      "Read(//Users/michael/.config/**)",
+      "Read(//Users/michael/.dots/**)",
+      "Read(//Users/michael/code/**)",
+      "Read(//private/tmp/**)"
+    ],
+    "deny": [],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git rebase:*)",
+      "Bash(git commit --amend:*)",
+      "Bash(git reset:*)",
+      "Bash(acli bitbucket pr create:*)",
+      "Bash(acli bitbucket pr edit:*)",
+      "Bash(acli bitbucket pr decline:*)",
+      "Bash(acli bitbucket pr comment create:*)",
+      "Bash(acli jira issue create:*)",
+      "Bash(acli jira issue update:*)",
+      "Bash(acli jira issue transition:*)",
+      "Bash(acli jira comment add:*)"
+    ]
+  }
+}

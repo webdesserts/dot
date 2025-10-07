@@ -1,20 +1,15 @@
 # Nushell Config File
 # Last updated against: 0.107.0
 
-use ~/scripts/utils.nu *
-use ~/scripts/externs.nu *
+use ~/scripts/personal.nu *
+
 use ~/scripts/themes.nu
-use ~/scripts/vscode.nu *
 use ~/scripts/prompts.nu
 
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
 
 prompts set minimal
-
-const work_script_files = "~/scripts/work-scripts.nu"
-const work_script_files = if ($work_script_files | path exists) { $work_script_files } else { null }
-source $work_script_files
 
 # The default config record. This is where much of your global configuration is setup.
 $env.config = {
