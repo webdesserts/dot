@@ -7,7 +7,7 @@
 #
 # Commands will provide clear error messages if these are not set.
 
-def "get-jira-config" [] {
+def "get-jira-config" []: nothing -> record {
   if 'ATLASSIAN_SITE' not-in $env {
     error make {msg: "ATLASSIAN_SITE environment variable is not set. Please set it in your shell config."}
   }
@@ -25,7 +25,7 @@ def "get-jira-config" [] {
   }
 }
 
-def "get-bitbucket-config" [] {
+def "get-bitbucket-config" []: nothing -> record {
   if 'ATLASSIAN_EMAIL' not-in $env {
     error make {msg: "ATLASSIAN_EMAIL environment variable is not set. Please set it in your shell config."}
   }
@@ -69,7 +69,7 @@ export def jira [] {
 }
 
 # Parse git remote URL to extract Bitbucket workspace and repo
-def get-bitbucket-repo [] {
+def get-bitbucket-repo []: nothing -> record {
   let remote_url = (git remote get-url origin | str trim)
 
   # Handle SSH format: git@bitbucket.org:workspace/repo.git
@@ -82,46 +82,23 @@ def get-bitbucket-repo [] {
   $parts | first
 }
 
-# Make an authenticated request to Bitbucket API (full URL)
-def bitbucket-request-url [
-  method: string,
-  url: string,
-  --data: string = ""
-] {
+# Get headers for Bitbucket API requests
+def get-bitbucket-headers []: nothing -> record {
   let config = (get-bitbucket-config)
-
-  if ($data | is-empty) {
-    curl -s -X $method -u $"($config.email):($config.token)" -H "Content-Type: application/json" $url | from json
-  } else {
-    curl -s -X $method -u $"($config.email):($config.token)" -H "Content-Type: application/json" -d $data $url | from json
+  let auth = ($"($config.email):($config.token)" | encode base64)
+  {
+    "Content-Type": "application/json",
+    "Authorization": $"Basic ($auth)"
   }
 }
 
-# Make an authenticated request to Bitbucket API (repo-relative endpoint)
-# Note: Bitbucket requires a separate token with Bitbucket-specific permissions
-def bitbucket-request [
-  method: string,
-  endpoint: string,
-  --data: string = ""
-] {
-  let repo = (get-bitbucket-repo)
-  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)($endpoint)"
-  bitbucket-request-url $method $url --data $data
-}
-
-# Make an authenticated request to Jira API
-def jira-request [
-  method: string,
-  endpoint: string,
-  --data: string = ""
-] {
+# Get headers for Jira API requests
+def get-jira-headers []: nothing -> record {
   let config = (get-jira-config)
-  let url = $"https://($config.site)($endpoint)"
-
-  if ($data | is-empty) {
-    curl -s -X $method -u $"($config.email):($config.token)" -H "Content-Type: application/json" $url
-  } else {
-    curl -s -X $method -u $"($config.email):($config.token)" -H "Content-Type: application/json" -d $data $url
+  let auth = ($"($config.email):($config.token)" | encode base64)
+  {
+    "Content-Type": "application/json",
+    "Authorization": $"Basic ($auth)"
   }
 }
 
@@ -147,8 +124,10 @@ def jira-request [
   #   jira issue view LOR-4262
   #   jira issue view LOR-4262 | get fields.summary
   #   jira issue view LOR-4262 | get fields.customfield_10039  # Acceptance Criteria
-  export def "jira issue view" [ticket: string] {
-    jira-request "GET" $"/rest/api/3/issue/($ticket)" | from json
+  export def "jira issue view" [ticket: string]: nothing -> record {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http get $"https://($config.site)/rest/api/3/issue/($ticket)" --headers $headers
   }
 
   # Update a Jira ticket with JSON payload
@@ -161,8 +140,10 @@ def jira-request [
   export def "jira issue update" [
     ticket: string,
     payload: string
-  ] {
-    jira-request "PUT" $"/rest/api/3/issue/($ticket)" --data $payload | from json
+  ]: nothing -> any {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http put $"https://($config.site)/rest/api/3/issue/($ticket)" $payload --headers $headers --content-type "application/json"
   }
 
   # Create a new Jira ticket
@@ -178,7 +159,7 @@ def jira-request [
     type: string,        # Issue type (e.g., "Story", "Bug", "Task")
     summary: string,     # Ticket summary/title
     --description: string = ""  # Optional description
-  ] {
+  ]: nothing -> record {
     let desc_content = if ($description | is-empty) {
       []
     } else {
@@ -204,7 +185,9 @@ def jira-request [
       }
     } | to json)
 
-    jira-request "POST" "/rest/api/3/issue" --data $payload | from json
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http post $"https://($config.site)/rest/api/3/issue" $payload --headers $headers --content-type "application/json"
   }
 
   # Transition a ticket to a new status
@@ -218,9 +201,12 @@ def jira-request [
   export def "jira issue transition" [
     ticket: string,      # Ticket ID (e.g., LOR-4262)
     status: string       # Target status name (e.g., "In Progress", "Done")
-  ] {
+  ]: nothing -> any {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+
     # Get available transitions
-    let transitions = (jira-request "GET" $"/rest/api/3/issue/($ticket)/transitions" | from json)
+    let transitions = (http get $"https://($config.site)/rest/api/3/issue/($ticket)/transitions" --headers $headers)
 
     # Find the transition ID that matches the target status
     let transition_id = ($transitions.transitions | where ($it.to.name == $status) | get 0.id? | default null)
@@ -231,7 +217,7 @@ def jira-request [
 
     # Execute the transition
     let payload = ({transition: {id: $transition_id}} | to json)
-    jira-request "POST" $"/rest/api/3/issue/($ticket)/transitions" --data $payload
+    http post $"https://($config.site)/rest/api/3/issue/($ticket)/transitions" $payload --headers $headers --content-type "application/json"
   }
 
   # List available issue types
@@ -243,12 +229,15 @@ def jira-request [
   #   jira issue types --project LOR      # List types available for LOR project
   export def "jira issue types" [
     --project: string = ""  # Optional project key to filter types
-  ] {
+  ]: nothing -> table {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+
     if ($project | is-empty) {
-      jira-request "GET" "/rest/api/3/issuetype" | from json | select id name description
+      http get $"https://($config.site)/rest/api/3/issuetype" --headers $headers | select id name description
     } else {
       # Get project-specific issue types from createmeta
-      let createmeta = (jira-request "GET" $"/rest/api/3/issue/createmeta?projectKeys=($project)&expand=projects.issuetypes" | from json)
+      let createmeta = (http get $"https://($config.site)/rest/api/3/issue/createmeta?projectKeys=($project)&expand=projects.issuetypes" --headers $headers)
       $createmeta.projects.0.issuetypes | select id name description
     }
   }
@@ -273,7 +262,7 @@ def jira-request [
   export def "jira comment add" [
     ticket: string,  # Ticket ID (e.g., LOR-4262)
     text: string     # Comment text
-  ] {
+  ]: nothing -> record {
     let payload = ({
       body: {
         type: "doc",
@@ -292,7 +281,9 @@ def jira-request [
       }
     } | to json)
 
-    jira-request "POST" $"/rest/api/3/issue/($ticket)/comment" --data $payload | from json
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http post $"https://($config.site)/rest/api/3/issue/($ticket)/comment" $payload --headers $headers --content-type "application/json"
   }
 
   # Search for Jira tickets using JQL
@@ -303,9 +294,11 @@ def jira-request [
   #   jira search 'project = LOR AND status = "In Progress"'
   #   jira search 'assignee = currentUser() AND status != Done'
   #   jira search 'project = LOR' | get issues | select key fields.summary
-  export def "jira search" [jql: string] {
+  export def "jira search" [jql: string]: nothing -> record {
     let encoded_jql = ($jql | url encode)
-    jira-request "GET" $"/rest/api/3/search?jql=($encoded_jql)" | from json
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http get $"https://($config.site)/rest/api/3/search?jql=($encoded_jql)" --headers $headers
   }
 
   # List all fields with their IDs and names
@@ -318,8 +311,10 @@ def jira-request [
   #   jira fields --filter date          # Find date-related fields
   export def "jira fields" [
     --filter: string = ""  # Optional filter pattern for field names
-  ] {
-    let all_fields = (jira-request "GET" "/rest/api/3/field" | from json)
+  ]: nothing -> table {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    let all_fields = (http get $"https://($config.site)/rest/api/3/field" --headers $headers)
 
     if ($filter | is-empty) {
       $all_fields | select id name custom
@@ -379,16 +374,20 @@ export def "bitbucket pr list" [
   --source: string = ""          # Filter by source branch name
   --destination: string = ""     # Filter by destination branch name
   --all                          # Fetch all pages (default: first page only, max 1000 items)
-] {
+]: nothing -> table {
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+
   mut all_prs = []
   mut next_url = $"/pullrequests?state=($state)&pagelen=20"
   let max_items = 1000
 
   loop {
     let response = if ($next_url | str starts-with "http") {
-      bitbucket-request-url "GET" $next_url
+      http get $next_url --headers $headers
     } else {
-      bitbucket-request "GET" $next_url
+      let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)($next_url)"
+      http get $url --headers $headers
     }
 
     # Handle error responses
@@ -463,8 +462,11 @@ export def "bitbucket pr list" [
 #   bitbucket pr view 123 | get links.html.href  # Get PR URL
 export def "bitbucket pr view" [
   id: int  # Pull request ID number
-] {
-  bitbucket-request "GET" $"/pullrequests/($id)"
+]: nothing -> record {
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)"
+  http get $url --headers $headers
 }
 
 # Create a new pull request
@@ -481,7 +483,7 @@ export def "bitbucket pr create" [
   source: string          # Source branch name
   destination?: string    # Destination branch name (optional, defaults to repo default)
   --description: string = ""  # PR description (optional)
-] {
+]: nothing -> record {
   let payload = if ($destination == null) {
     {
       title: $title,
@@ -509,7 +511,10 @@ export def "bitbucket pr create" [
     }
   }
 
-  bitbucket-request "POST" "/pullrequests" --data ($payload | to json)
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests"
+  http post $url ($payload | to json) --headers $headers --content-type "application/json"
 }
 
 # Edit an existing pull request
@@ -526,7 +531,7 @@ export def "bitbucket pr edit" [
   --title: string             # New PR title
   --description: string       # New PR description
   --payload: string           # Raw JSON payload (for advanced updates)
-] {
+]: nothing -> record {
   let data = if ($payload != null) {
     $payload
   } else {
@@ -541,7 +546,10 @@ export def "bitbucket pr edit" [
     $updates | to json
   }
 
-  bitbucket-request "PUT" $"/pullrequests/($id)" --data $data
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)"
+  http put $url $data --headers $headers --content-type "application/json"
 }
 
 # Comment commands - work with PR comments
@@ -561,14 +569,17 @@ export def "bitbucket pr comment" [] {
 export def "bitbucket pr comment create" [
   id: int      # Pull request ID number
   text: string # Comment text
-] {
+]: nothing -> record {
   let payload = {
     content: {
       raw: $text
     }
   }
 
-  bitbucket-request "POST" $"/pullrequests/($id)/comments" --data ($payload | to json)
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)/comments"
+  http post $url ($payload | to json) --headers $headers --content-type "application/json"
 }
 
 # Decline a pull request
@@ -586,20 +597,19 @@ export def "bitbucket pr comment create" [
 export def "bitbucket pr decline" [
   id: int                # Pull request ID number
   --message: string = "" # Optional decline reason/message (may not work - see NOTE above)
-] {
-  let data = if ($message | is-empty) {
-    ""
+]: nothing -> any {
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+  let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)/decline"
+
+  if ($message | is-empty) {
+    http post $url --headers $headers
   } else {
-    {
+    let data = {
       content: {
         raw: $message
       }
     } | to json
-  }
-
-  if ($data | is-empty) {
-    bitbucket-request "POST" $"/pullrequests/($id)/decline"
-  } else {
-    bitbucket-request "POST" $"/pullrequests/($id)/decline" --data $data
+    http post $url $data --headers $headers --content-type "application/json"
   }
 }
