@@ -29,12 +29,6 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 - **`./CLAUDE.local.md`**: Personal working notes for current project (git-ignored)
 - **`TODO.md`**: Task management only (separate from memory system)
 
-### Commands for Memory Management
-
-- `/memory` - View and edit all memory files
-- `#` shortcut - Quick memory additions
-- Import syntax: `@path/to/import` (relative paths supported)
-
 ---
 
 ## Settings and Permissions
