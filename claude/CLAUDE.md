@@ -56,15 +56,15 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 ### Common Patterns
 
 **Local operations (allowed):**
-- `Bash(git commit*)`, `Bash(git add*)` - local git operations
+- `Bash(git commit:*)`, `Bash(git add:*)` - local git operations
 - `Read(//path/**)` - reading files
-- `Bash(yarn test*)` - running tests
+- `Bash(yarn test:*)` - running tests
 
 **Team-visible operations (require approval):**
-- `Bash(git push*)` - pushing to remote
-- `Bash(git rebase*)`, `Bash(git commit --amend*)`, `Bash(git reset*)` - git history changes
-- `Bash(acli bitbucket pr create*)` - creating PRs
-- `Bash(acli jira issue create*)`, `Bash(acli jira issue update*)` - creating/updating tickets
+- `Bash(git push:*)` - pushing to remote
+- `Bash(git rebase:*)`, `Bash(git commit --amend:*)`, `Bash(git reset:*)` - git history changes
+- `Bash(acli bitbucket pr create:*)` - creating PRs
+- `Bash(acli jira issue create:*)`, `Bash(acli jira issue update:*)` - creating/updating tickets
 
 ---
 
