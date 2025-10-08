@@ -216,15 +216,15 @@ Task: Implement local storage utilities
 ### Naming Conventions
 
 ```typescript
-describe("DataviewStore", () => {
-  describe("new DataviewStore()", () => {
-    it("should create a new DataviewStore", () => {
+describe("UserStore", () => {
+  describe("new UserStore()", () => {
+    it("should create a new UserStore", () => {
       // Constructor behavior
     });
   });
 
   describe("load()", () => {
-    it("should load the dataview", async () => {
+    it("should load the user data", async () => {
       // Happy path behavior
     });
 
@@ -268,7 +268,7 @@ Test comments should add context that isn't obvious from the test structure:
 - Explaining basic language constructs
 - Over-commenting self-explanatory assertions
 
-### Good Examples from Codebase
+### Good Examples
 
 ```typescript
 // Scenario-based organization
@@ -279,13 +279,13 @@ describe(`If one does not exist`, () => {
 });
 
 describe(`If one DOES exist`, () => {
-  it("should restore that listViewAside", () => {
+  it("should restore the previous state", () => {
     // Test restoration logic
   });
 });
 
 // Business rule testing
-describe(`filter type is ${FilterTypes.SIMPLE_NUMERIC_FILTER}`, () => {
+describe(`when filter type is numeric`, () => {
   it('should work like >= when the operation is "greaterThanEqualTo"', () => {
     // Multiple specific test cases
   });
@@ -338,10 +338,10 @@ const users = data.filter((item) => item.type === "user"); // Exclude admin acco
 
 #### Special Comment Types
 
-- **`~Rev:` comments**: These are temporary code review comments that should be **read and immediately deleted** as you address them. Treat them like inline code review feedback that needs action.
+- **`~rev:` comments**: These are temporary code review comments that should be **read and immediately deleted** as you address them. Treat them like inline code review feedback that needs action.
 
   ```typescript
-  // ~Rev: What's the use case for this function? It's not clear from the documentation.
+  // ~rev: What's the use case for this function? It's not clear from the documentation.
   ```
 
 - **Implementation detail comments**: OK to include when:
@@ -460,7 +460,7 @@ Place documentation where developers will encounter it in their development envi
 - Integration guidance for other developers
 - Clear examples of intended usage
 - Comments that add context not obvious from code
-- Temporary `~Rev:` comments that get addressed and removed
+- Temporary `~rev:` comments that get addressed and removed
 
 ## Dotfile Management
 
