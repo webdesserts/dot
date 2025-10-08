@@ -43,8 +43,9 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 ### Settings Files
 
-- **`~/.claude/settings.local.json`**: Global permissions across ALL projects
-- **`./.claude/settings.local.json`**: Project-specific permissions (override global)
+- **`~/.claude/settings.json`**: Global permissions across ALL projects (user-specific)
+- **`./.claude/settings.json`**: Project-specific permissions shared with team (can be committed to git)
+- **`./.claude/settings.local.json`**: Project-specific user overrides (git-ignored, takes precedence over team settings)
 
 ### Permission Types
 
