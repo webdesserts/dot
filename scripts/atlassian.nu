@@ -478,13 +478,15 @@ export def "bitbucket pr view" [
 #   bitbucket pr create "Fix bug" "feature/fix-123"                    # PR to default branch
 #   bitbucket pr create "New feature" "feature/new" "develop"          # PR to develop
 #   bitbucket pr create "Fix" "bugfix" "main" --description "Details"  # With description
+#   bitbucket pr create "WIP: Feature" "feature/wip" --draft           # Create as draft PR
 export def "bitbucket pr create" [
   title: string           # PR title
   source: string          # Source branch name
   destination?: string    # Destination branch name (optional, defaults to repo default)
   --description: string = ""  # PR description (optional)
+  --draft                 # Create as draft PR (prevents merging, reviewers not notified)
 ]: nothing -> record {
-  let payload = if ($destination == null) {
+  let base_payload = if ($destination == null) {
     {
       title: $title,
       source: {
@@ -509,6 +511,12 @@ export def "bitbucket pr create" [
       },
       description: $description
     }
+  }
+
+  let payload = if $draft {
+    $base_payload | insert draft true
+  } else {
+    $base_payload
   }
 
   let headers = (get-bitbucket-headers)
