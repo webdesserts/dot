@@ -31,6 +31,17 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 ---
 
+## Obsidian Memory
+
+**Search notes before answering questions.** When the user asks about ANY topic, check if information exists in notes first before relying on training data.
+
+- Use `get_note()` to check if a topic has a note, then Read the file path to view content
+- Use `get_graph_neighborhood()` to find related notes and explore connections
+- Trust note content over training data when they conflict
+- The Notetaker skill automatically captures important information to Working Memory
+
+---
+
 ## Settings and Permissions
 
 **Documentation**: https://docs.claude.com/en/docs/claude-code/settings
@@ -50,11 +61,13 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 ### Common Patterns
 
 **Local operations (allowed):**
+
 - `Bash(git commit:*)`, `Bash(git add:*)` - local git operations
 - `Read(//path/**)` - reading files
 - `Bash(yarn test:*)` - running tests
 
 **Team-visible operations (require approval):**
+
 - `Bash(git push:*)` - pushing to remote
 - `Bash(git rebase:*)`, `Bash(git commit --amend:*)`, `Bash(git reset:*)` - git history changes
 - `Bash(acli bitbucket pr create:*)` - creating PRs
