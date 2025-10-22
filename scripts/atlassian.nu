@@ -294,11 +294,16 @@ def get-jira-headers []: nothing -> record {
   #   jira search 'project = LOR AND status = "In Progress"'
   #   jira search 'assignee = currentUser() AND status != Done'
   #   jira search 'project = LOR' | get issues | select key fields.summary
-  export def "jira search" [jql: string]: nothing -> record {
+  #   jira search 'parent = RDMP-3145' --fields 'key,summary,status,assignee'
+  export def "jira search" [
+    jql: string
+    --fields: string = "key,summary,status,assignee"  # Fields to return (comma-separated)
+  ]: nothing -> record {
     let encoded_jql = ($jql | url encode)
+    let encoded_fields = ($fields | url encode)
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http get $"https://($config.site)/rest/api/3/search?jql=($encoded_jql)" --headers $headers
+    http get $"https://($config.site)/rest/api/3/search/jql?jql=($encoded_jql)&fields=($encoded_fields)" --headers $headers
   }
 
   # List all fields with their IDs and names
