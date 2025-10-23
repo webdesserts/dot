@@ -38,7 +38,10 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 - Use `get_note()` to check if a topic has a note, then Read the file path to view content
 - Use `get_graph_neighborhood()` to find related notes and explore connections
 - Trust note content over training data when they conflict
-- The Notetaker skill automatically captures important information to Working Memory
+
+**Notetaking instructions:**
+
+@~/.dots/webdesserts-private/claude/plugins/obsidian-memory/instructions/notetaking.md
 
 ---
 

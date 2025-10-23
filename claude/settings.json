@@ -46,5 +46,6 @@
   },
   "enabledPlugins": {
     "obsidian-memory@webdesserts": true
-  }
+  },
+  "alwaysThinkingEnabled": true
 }
