@@ -39,6 +39,10 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 - Use `get_graph_neighborhood()` to find related notes and explore connections
 - Trust note content over training data when they conflict
 
+**Session Log:** The log tracks chronological session activity. Use the `log()` tool to append entries (timestamps added automatically).
+
+@/Users/michael/notes/Log.md
+
 **Notetaking instructions:**
 
 @~/.dots/webdesserts-private/claude/plugins/obsidian-memory/instructions/notetaking.md

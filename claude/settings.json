@@ -21,6 +21,7 @@
       "mcp__plugin_obsidian-memory_obsidian-memory__get_note_usage",
       "mcp__plugin_obsidian-memory_obsidian-memory__update_frontmatter",
       "mcp__plugin_obsidian-memory_obsidian-memory__load_private_memory",
+      "mcp__plugin_obsidian-memory_obsidian-memory__log",
       "mcp__plugin_obsidian-memory_obsidian-memory__reindex",
       "mcp__plugin_obsidian-memory_obsidian-memory__complete_reindex",
       "mcp__plugin_obsidian-memory_obsidian-memory__reflect",
