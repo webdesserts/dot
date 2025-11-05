@@ -29,11 +29,15 @@ platform=$(uname)
 
 # Add things to the PATH here
 export PATH=\
+/opt/homebrew/bin:\
 /usr/local/bin:\
 ~/bin:\
 ~/.cargo/bin:\
 ~/.local/bin:\
 $PATH
+
+# Note: /opt/homebrew - Homebrew on Apple Silicon (arm64)
+#       /usr/local    - Homebrew on Intel Macs (x64)
 
 export RUST_SRC_PATH=/usr/local/src/rust/src
 

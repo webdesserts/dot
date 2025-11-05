@@ -1,5 +1,6 @@
 const paths = [
-  /usr/local/bin,
+  /opt/homebrew/bin,  # Homebrew on Apple Silicon (arm64)
+  /usr/local/bin,     # Homebrew on Intel Macs (x64)
   ~/bin,
   ~/.cargo/bin,
   ~/.local/bin,
