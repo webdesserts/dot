@@ -27,6 +27,7 @@
       "mcp__plugin_webdesserts_memory__CompleteReindex",
       "mcp__plugin_webdesserts_memory__Reflect",
       "mcp__plugin_webdesserts_memory__CompleteReflect",
+      "mcp__plugin_webdesserts_memory__Search",
       "Read(//Users/michael/notes/**)",
       "Write(//Users/michael/notes/**/Working Memory.md)",
       "Write(//Users/michael/notes/**/Index.md)"
