@@ -86,36 +86,46 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 ## Commit Workflow - VERY IMPORTANT
 
-When implementing features, follow this strict workflow:
+When making commits, follow these rules:
 
-1. **Small, Standalone Commits**: Break work into the smallest possible logical units
-2. **One Task at a Time**: Implement only ONE logical task/commit, then STOP and wait for user review
-3. **Wait for User Approval**: After implementing each task, wait for the user to review and commit before proceeding
-4. **No Bulk Implementation**: Never implement multiple commits worth of changes in sequence without user approval
+### Commit Message Format
+
+- **Keep subject lines short and clear** - Describe what changed, not why
+- **Use extra description sparingly** - Only add detail when explaining bugs or linking important context
+- **No paragraphs** - Keep description concise, a few lines at most
+- **NEVER add attribution lines** - Do NOT include any of these:
+  - "Co-Authored-By: Claude <noreply@anthropic.com>"
+  - "Generated with [Claude Code](https://claude.com/claude-code)"
+  - Any similar attribution or signature lines
+- **Plain commit messages only** - Just the subject line and optional brief description, nothing else
+
+### Git Safety Rules
+
+- **NEVER push without permission** - Always ask before pushing to remote
+- **NEVER force push to main/master** - Warn user if they request it
+- **NEVER skip hooks** - Don't use --no-verify, --no-gpg-sign, etc. unless explicitly requested
+- **NEVER amend other developers' commits** - Only amend your own most recent commit if needed
+
+### Commit Strategy
+
+- **Small, standalone commits** - Break work into logical units that can be reviewed independently
+- **Atomic changes** - Each commit should be a complete, working change
+- **Clean history** - Enables easy rollback and clear project evolution
 
 ### Example Workflow:
 
 ```
 Task: Implement local storage utilities
-✅ DO: Implement ONLY the localStorage utils, then wait for user to commit
-❌ DON'T: Implement localStorage utils + dialog component + integration all at once
+✅ DO: Break into logical commits (utils → component → integration)
+❌ DON'T: Single massive commit with everything at once
 ```
 
-### Typical Commit Sequence:
+### Why This Matters
 
-1. Implement localStorage utilities → Wait for user commit
-2. Create dialog component → Wait for user commit
-3. Add dialog styling → Wait for user commit
-4. Modify store logic → Wait for user commit
-5. Integrate components → Wait for user commit
-
-## Why This Matters
-
-- User wants to review each change before committing
 - Enables easy rollback of individual changes
-- Creates clean git history
-- Allows user to provide feedback at each step
-- Prevents large, hard-to-review changesets
+- Creates clean, navigable git history
+- Makes code review more effective
+- Allows bisecting to find when bugs were introduced
 
 ## Implementation Approach - CRITICAL
 
@@ -523,5 +533,6 @@ dots path <dot-name>
 
 ## Remember
 
-**ALWAYS STOP AND WAIT** after implementing each logical unit for user review and commit approval!
+**NEVER PUSH** without explicit user permission!
 **ALWAYS SYNC** before making major architectural decisions or diverging from original approach!
+**KEEP COMMITS CLEAN** - short messages, no co-author attribution, minimal description text!
