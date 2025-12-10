@@ -567,9 +567,71 @@ export def "bitbucket pr edit" [
 
 # Comment commands - work with PR comments
 export def "bitbucket pr comment" [] {
-  print "Usage: bitbucket pr comment <command>"
+  print "Bitbucket PR Comment Commands"
   print ""
-  print "Run 'help bitbucket pr comment' to see available commands"
+  print "Usage:"
+  print "  bitbucket pr comment list <id>          - List comments on a PR"
+  print "  bitbucket pr comment create <id> <text> - Add comment to a PR"
+  print ""
+  print "Run 'help bitbucket pr comment <command>' for detailed usage"
+}
+
+# List comments on a pull request
+#
+# Returns all comments (general and inline) for the specified PR.
+# By default returns first page. Use --all to fetch all pages (max 1000 items).
+#
+# Example:
+#   bitbucket pr comment list 123                  # List comments (first page)
+#   bitbucket pr comment list 123 --all            # List all comments
+#   bitbucket pr comment list 123 | where path != null  # Only inline comments
+export def "bitbucket pr comment list" [
+  id: int  # Pull request ID number
+  --all    # Fetch all pages (default: first page only, max 1000 items)
+]: nothing -> table {
+  let headers = (get-bitbucket-headers)
+  let repo = (get-bitbucket-repo)
+
+  mut all_comments = []
+  mut next_url = $"/pullrequests/($id)/comments?pagelen=50"
+  let max_items = 1000
+
+  loop {
+    let response = if ($next_url | str starts-with "http") {
+      http get $next_url --headers $headers
+    } else {
+      let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)($next_url)"
+      http get $url --headers $headers
+    }
+
+    if ($response.type? == "error") {
+      error make {msg: $"Bitbucket API error: ($response.error.message)"}
+    }
+
+    $all_comments = ($all_comments | append $response.values)
+
+    if ($all_comments | length) >= $max_items or (not $all) or ($response.next? == null) {
+      break
+    }
+
+    $next_url = $response.next
+  }
+
+  # Filter deleted comments and transform to clean output
+  $all_comments
+    | first $max_items
+    | where { |c| $c.deleted? != true }
+    | sort-by created_on
+    | each { |c|
+        {
+          id: $c.id,
+          author: $c.user.display_name,
+          content: $c.content.raw,
+          created_on: $c.created_on,
+          path: ($c.inline?.path? | default null),
+          line: ($c.inline?.to? | default ($c.inline?.from? | default null))
+        }
+      }
 }
 
 # Add a comment to a pull request
