@@ -45,7 +45,7 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 **Notetaking instructions:**
 
-@~/.dots/webdesserts-private/claude/plugins/obsidian-memory/instructions/notetaking.md
+@~/.dots/webdesserts-private/obsidian-memory/notetaking.md
 
 ---
 
