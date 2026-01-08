@@ -99,6 +99,10 @@ fi
 export GIT_EDITOR=vim
 export EDITOR=vim
 
+# Load secrets from 1Password Environment (mounted .env file)
+# See: https://developer.1password.com/docs/environments/local-env-file
+[[ -f ~/.config/secrets.env ]] && source ~/.config/secrets.env
+
   #=================#
  # Helpful Scripts #
 #=================#

@@ -6,9 +6,15 @@ const paths = [
   ~/.local/bin,
 ] | path expand
 
-$env.PATH = ( 
-  $env.PATH | prepend $paths
- )
+# Normalize PATH to a list (it may be a colon-separated string when inherited from parent shell)
+# then prepend our custom paths
+$env.PATH = (
+  $env.PATH 
+  | each { |p| $p | split row ":" } 
+  | flatten 
+  | prepend $paths 
+  | uniq
+)
 
 $env.EDITOR = 'code -w'
   
@@ -20,6 +26,18 @@ $env.NU_PLUGIN_DIRS = [($env.HOME | path join 'plugins')]
 
 const 1password_sock = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" | path expand
 $env.SSH_AUTH_SOCK = $1password_sock
+
+# Load secrets from 1Password Environment (mounted .env file)
+# See: https://developer.1password.com/docs/environments/local-env-file
+const secrets_file = "~/.config/secrets.env" | path expand
+if ($secrets_file | path exists) {
+  open $secrets_file 
+    | lines 
+    | where { |line| not ($line | str starts-with '#') and ($line | str contains '=') }
+    | parse "{key}={value}" 
+    | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
+    | load-env
+}
 
 const work_env_file = "~/scripts/work-env.nu"
 if ($work_env_file | path exists) {
