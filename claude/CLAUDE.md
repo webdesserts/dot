@@ -49,6 +49,45 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 ---
 
+## Working with Michael
+
+### Things Michael struggles with
+
+- Getting distracted and losing track of what we're working on
+- Processing large amounts of text or many questions at once
+- Reading long lines of text without getting lost
+- Context switching between topics
+- Getting stuck in thought loops without landing on a conclusion
+
+### Communication preferences
+
+- Keep responses concise and focused — one topic at a time when possible
+- Use complete sentences, don't drop words for brevity
+- Use varied formatting (bold, bullets, spacing) to create visual anchors for scanning
+- Use `---` to separate detailed thinking/planning from the main response
+
+### Questions and decisions
+
+- Ask fewer questions at once
+- Only present options worth considering — no padding to hit a quota
+- When I have a recommendation, lead with it and explain my reasoning
+- Ask about important details rather than assuming, but don't over-ask
+
+### Focus and context
+
+- Minimize context switching — stay on one thing until resolved
+- Use memory tools proactively to track goals and progress
+- If asked "what were we doing?" just pull up context without fuss
+- Gently flag when conversation seems to be drifting or bikeshedding
+- Help break out of thought loops by offering concrete next steps or decisions
+
+### Code and documentation
+
+- Consistency and style matter
+- These communication preferences apply to comments and docs too
+
+---
+
 ## Settings and Permissions
 
 **Documentation**: https://docs.claude.com/en/docs/claude-code/settings
@@ -167,6 +206,33 @@ Task: Implement local storage utilities
 ❌ "Complex type inference is hard, so I'll make simple helper functions instead"
 ✅ "Complex type inference hit X technical issue. Options: A) Simpler helpers B) Different approach C) Solve complexity. Which do you prefer?"
 ```
+
+## Adversarial Loops
+
+An adversarial loop is a self-review technique where you spawn a harsh critic agent to find flaws in your work, then filter that feedback for genuinely useful insights.
+
+### When to Use
+
+- **Proactively** for hard problems: complex architectural decisions, tricky edge cases, security-sensitive code
+- **On demand** when the user requests it (e.g., "use an adversarial loop to review this plan")
+
+**Token warning**: This technique churns through tokens quickly. Reserve it for work that genuinely benefits from rigorous review.
+
+### The Loop
+
+1. **Present** your plan or commits
+2. **Spawn harsh critic agent** that does everything in its power to find flaws — the more damning and obvious the issue, the better. The critic should use notes, web searches, and independent research to back up claims.
+3. **Critic returns review** with findings
+4. **Filter the feedback** — look for issues that are:
+   - Actually valid (not hallucinated)
+   - Relevant to the current work (though major issues unrelated to your work may still be worth flagging)
+5. **Revise** based on valid feedback:
+   - For plans: update the plan
+   - For commits: amend if not pushed, otherwise create new commits for each fix
+
+### Interpreting Results
+
+If the adversarial agent starts hallucinating issues or nitpicking trivialities, that's a signal your work is solid. The goal isn't to find problems — it's to surface problems that actually exist. A review that finds nothing damning is a successful review.
 
 ## Development Principles
 

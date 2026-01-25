@@ -8,7 +8,6 @@ use ~/scripts/prompts.nu
 
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
-alias claude = /Users/michael/.claude/local/claude
 
 prompts set minimal
 

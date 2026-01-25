@@ -37,5 +37,9 @@
       "Bash(acli jira comment add:*)"
     ]
   },
-  "alwaysThinkingEnabled": true
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true
+  },
+  "alwaysThinkingEnabled": true,
+  "autoUpdatesChannel": "latest"
 }
