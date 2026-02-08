@@ -1,13 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git commit:*)",
-      "Bash(git add:*)",
-      "Bash(git fetch:*)",
-      "Bash(git log:*)",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git revert:*)",
       "WebFetch(domain:docs.claude.com)",
       "WebSearch",
       "Read(//Users/michael/.claude/**)",
@@ -15,27 +8,17 @@
       "Read(//Users/michael/.dots/**)",
       "Read(//Users/michael/code/**)",
       "Read(//private/tmp/**)",
-      "mcp__obsidian-memory",
-      "Read(//Users/michael/notes/**)",
-      "Write(//Users/michael/notes/**/Working Memory.md)",
-      "Write(//Users/michael/notes/**/Index.md)"
+      "mcp__memory",
+      "mcp__nushell",
+      "Read(//Users/michael/notes/**)"
     ],
-    "deny": [],
-    "ask": [
-      "Write(//Users/michael/notes/**)",
-      "Bash(git push:*)",
-      "Bash(git rebase:*)",
-      "Bash(git commit --amend:*)",
-      "Bash(git reset:*)",
-      "Bash(acli bitbucket pr create:*)",
-      "Bash(acli bitbucket pr edit:*)",
-      "Bash(acli bitbucket pr decline:*)",
-      "Bash(acli bitbucket pr comment create:*)",
-      "Bash(acli jira issue create:*)",
-      "Bash(acli jira issue update:*)",
-      "Bash(acli jira issue transition:*)",
-      "Bash(acli jira comment add:*)"
-    ]
+    "deny": [
+      "Bash"
+    ],
+    "ask": []
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true
