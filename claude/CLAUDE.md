@@ -615,6 +615,7 @@ BDD-style specs define expected behavior using Gherkin syntax (Given/When/Then).
 
 ## Remember
 
+**NEVER use Bash** — use nushell for all shell operations!
 **NEVER PUSH** without explicit user permission!
 **ALWAYS SYNC** before making major architectural decisions or diverging from original approach!
 **KEEP COMMITS CLEAN** - short messages, no co-author attribution, minimal description text!

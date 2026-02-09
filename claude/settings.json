@@ -12,17 +12,11 @@
       "mcp__nushell",
       "Read(//Users/michael/notes/**)"
     ],
-    "deny": [
-      "Bash"
-    ],
+    "deny": ["Bash"],
     "ask": []
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true
   },
-  "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
-  },
-  "alwaysThinkingEnabled": true,
-  "autoUpdatesChannel": "latest"
+  "alwaysThinkingEnabled": true
 }

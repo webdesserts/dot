@@ -17,6 +17,7 @@ $env.PATH = (
 )
 
 $env.EDITOR = 'code -w'
+$env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
   
 # Directories to search for scripts when calling source or use
 $env.NU_LIB_DIRS = [($env.HOME | path join 'scripts')]
