@@ -103,5 +103,36 @@ export def key-widths [start: int, end: int]: nothing -> list<int> {
 # Compute the chromatic start/end range for a set of note names.
 # Extends left to the nearest group boundary (C or F) and right to cover the octave.
 export def auto-range [notes: list<string>]: nothing -> record<start: int, end: int> {
-  {start: -1, end: -1}
+  let root_idx = note-to-index ($notes | first)
+  let octave = $root_idx + 12
+  let root_mod = $root_idx mod 12
+
+  # Left edge: nearest group start (C=0 or F=5) strictly before root.
+  # If root IS a group start, go one further back.
+  let group_starts = [0, 5]  # C and F within one octave
+  let left = if $root_mod == 0 {
+    # Root is C — go back to F in previous octave, but floor at 0
+    [($root_idx - 7), 0] | math max
+  } else if $root_mod == 5 {
+    # Root is F — go back to C in same octave
+    $root_idx - 5
+  } else {
+    # Find nearest C or F below root
+    $group_starts | each {|gs| $root_idx - (($root_mod - $gs + 12) mod 12)} | math max
+  }
+
+  # Right edge: if octave lands on a group start (C or F), end there.
+  # Otherwise extend to nearest group end (E=4 or B=11).
+  let octave_mod = $octave mod 12
+  let right = if $octave_mod in $group_starts {
+    $octave
+  } else {
+    let group_ends = [4, 11]  # E and B within one octave
+    $group_ends | each {|ge|
+      let candidate = $octave + (($ge - $octave_mod + 12) mod 12)
+      $candidate
+    } | math min
+  }
+
+  {start: $left, end: $right}
 }
