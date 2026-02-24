@@ -31,7 +31,7 @@ export def is-black [index: int]: nothing -> bool {
 
 # Get the semitone intervals for a named scale
 export def scale-intervals [name: string] {
-  match $name {
+  match ($name | str capitalize) {
     "Major" => [0, 2, 4, 5, 7, 9, 11],
     "Minor" => [0, 2, 3, 5, 7, 8, 10],
     _ => (error make {msg: $"Unknown scale: \"($name)\". Supported: Major, Minor"})
@@ -40,7 +40,7 @@ export def scale-intervals [name: string] {
 
 # Get the semitone intervals for a named chord
 export def chord-intervals [name: string] {
-  match $name {
+  match ($name | str capitalize) {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
     _ => (error make {msg: $"Unknown chord: \"($name)\". Supported: Major, Minor"})
