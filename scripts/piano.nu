@@ -74,3 +74,10 @@ export def compute-notes [root: string, intervals: list<int>]: nothing -> list<s
     }
   }
 }
+
+# Compute the top-row width of each chromatic key in a range.
+# start/end are absolute chromatic indices (can exceed 11 for multi-octave).
+# Edge white keys gain +1 width when their adjacent black key is cut off by the range boundary.
+export def key-widths [start: int, end: int]: nothing -> list<int> {
+  []
+}
