@@ -43,7 +43,9 @@ def chord-intervals [name: string] {
   match ($name | str capitalize) {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
-    _ => (error make {msg: $"Unknown chord: \"($name)\". Supported: Major, Minor"})
+    "Diminished" => [0, 3, 6],
+    "Augmented" => [0, 4, 8],
+    _ => (error make {msg: $"Unknown chord: \"($name)\". Supported: Major, Minor, Diminished, Augmented"})
   }
 }
 
