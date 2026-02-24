@@ -75,6 +75,7 @@ export def compute-notes [root: string, intervals: list<int>]: nothing -> list<s
       0 => $target_letter,
       1 => $"($target_letter)#",
       11 => $"($target_letter)b",
+      _ => (error make {msg: $"Cannot spell note at interval ($interval) from ($root) (double-sharp/flat needed)"})
     }
   }
 }
@@ -277,7 +278,15 @@ def notes-to-abs-indices [notes: list<string>, start: int]: nothing -> list<int>
 
 # Generate a keyboard diagram highlighting the given notes
 export def "piano notes" [...notes: string, --range: string, --range-end: string]: nothing -> string {
+  if ($notes | is-empty) {
+    error make {msg: "No notes provided. Usage: piano notes C E G"}
+  }
+
   let note_list = $notes
+
+  if ($range != null) xor ($range_end != null) {
+    error make {msg: "--range and --range-end must be used together"}
+  }
 
   let rng = if $range != null and $range_end != null {
     let s = note-to-index $range
