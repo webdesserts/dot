@@ -16,6 +16,7 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/scripts/vscode.nu" = "scripts/vscode.nu"
 "~/scripts/personal.nu" = "scripts/personal.nu"
 "~/scripts/atlassian.nu" = "scripts/atlassian.nu"
+"~/scripts/piano.nu" = "scripts/piano.nu"
 "~/.config/git/config" = "git/config"
 "~/.config/git/config_webdesserts" = "git/config_webdesserts"
 "~/.editorconfig" = "editorconfig"

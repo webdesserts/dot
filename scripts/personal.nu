@@ -9,6 +9,7 @@
 export use ~/scripts/utils.nu *
 export use ~/scripts/externs.nu *
 export use ~/scripts/vscode.nu *
+export use ~/scripts/piano.nu *
 
 # Conditionally load work module (if it exists)
 const work_module = "~/scripts/work.nu"
