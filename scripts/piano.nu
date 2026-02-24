@@ -38,14 +38,16 @@ def scale-intervals [name: string] {
   }
 }
 
-# Get the semitone intervals for a named chord with optional extension (7th, 9th, 11th, 13th)
+# Get the semitone intervals and letter steps for a named chord.
+# Returns {semitones: list<int>, letters: list<int>} where letters are stacked-third
+# positions (0, 2, 4, 6, ...) that resolve the tritone ambiguity in enharmonic spelling.
 def chord-intervals [quality: string, extension: string = ""] {
   let key = if $extension == "" {
     $quality | str capitalize
   } else {
     $"($quality | str capitalize) ($extension)"
   }
-  match $key {
+  let semitones = match $key {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
     "Diminished" => [0, 3, 6],
@@ -66,37 +68,75 @@ def chord-intervals [quality: string, extension: string = ""] {
     "Dominant 13th" => [0, 4, 7, 10, 14, 17, 21],
     _ => (error make {msg: $"Unknown chord: \"($key)\". Supported: Major, Minor, Diminished, Augmented, and 7th/9th/11th/13th extensions"})
   }
+  let letters = 0..<($semitones | length) | each {|i| $i * 2}
+  {semitones: $semitones, letters: $letters}
 }
 
-# Apply an inversion by rotating the bottom N notes up an octave
-def apply-inversion [intervals: list<int>, inversion: int]: nothing -> list<int> {
-  mut result = $intervals
-  for _ in 0..<$inversion {
-    let bottom = $result | first
-    $result = ($result | skip 1 | append ($bottom + 12))
+# Apply an inversion by rotating the bottom N notes up an octave.
+# Works on both plain interval lists and chord records with semitones+letters.
+def apply-inversion [intervals, inversion: int] {
+  if ($intervals | describe | str starts-with "record") {
+    mut semitones = $intervals.semitones
+    mut letters = $intervals.letters
+    for _ in 0..<$inversion {
+      let bottom_s = $semitones | first
+      let bottom_l = $letters | first
+      $semitones = ($semitones | skip 1 | append ($bottom_s + 12))
+      $letters = ($letters | skip 1 | append ($bottom_l + 7))
+    }
+    {semitones: $semitones, letters: $letters}
+  } else {
+    mut result = $intervals
+    for _ in 0..<$inversion {
+      let bottom = $result | first
+      $result = ($result | skip 1 | append ($bottom + 12))
+    }
+    $result
   }
-  $result
 }
 
 # Given a root note and intervals, compute note names using correct enharmonic spelling.
-# Uses the standard semitone-to-letter-step mapping so chords and scales both spell correctly.
-def compute-notes [root: string, intervals: list<int>]: nothing -> list<string> {
+# By default uses the SEMITONE_TO_LETTER_STEP lookup, which works for scales.
+# Pass --letter-steps for chords to resolve tritone ambiguity (dim 5th vs aug 4th).
+def compute-notes [root: string, intervals: list<int>, --letter-steps: list<int>]: nothing -> list<string> {
   let root_idx = note-to-index $root
   let root_letter = $root | split chars | first
   let letter_start = ($LETTERS | enumerate | where item == $root_letter | get index | first)
 
-  $intervals | each {|interval|
+  $intervals | enumerate | each {|entry|
+    let interval = $entry.item
     let semitones = $interval mod 12
-    let letter_step = $SEMITONE_TO_LETTER_STEP | get $semitones
     let abs_idx = ($root_idx + $interval) mod 12
-    let target_letter = ($LETTERS | get (($letter_start + $letter_step) mod 7))
-    let letter_idx = ($LETTER_INDICES | get (($letter_start + $letter_step) mod 7))
+
+    # Try explicit letter step first (resolves tritone ambiguity for chords),
+    # fall back to semitone lookup if it would need a double accidental.
+    let primary_step = if $letter_steps != null {
+      $letter_steps | get $entry.index
+    } else {
+      $SEMITONE_TO_LETTER_STEP | get $semitones
+    }
+    let target_letter = ($LETTERS | get (($letter_start + $primary_step) mod 7))
+    let letter_idx = ($LETTER_INDICES | get (($letter_start + $primary_step) mod 7))
     let diff = ($abs_idx - $letter_idx + 12) mod 12
-    match $diff {
-      0 => $target_letter,
-      1 => $"($target_letter)#",
-      11 => $"($target_letter)b",
-      _ => (error make {msg: $"Cannot spell note at interval ($interval) from ($root) (double-sharp/flat needed)"})
+
+    if $diff in [0, 1, 11] {
+      match $diff {
+        0 => $target_letter,
+        1 => $"($target_letter)#",
+        11 => $"($target_letter)b",
+      }
+    } else {
+      # Fall back to semitone-based lookup (avoids double accidentals)
+      let fallback_step = $SEMITONE_TO_LETTER_STEP | get $semitones
+      let fb_letter = ($LETTERS | get (($letter_start + $fallback_step) mod 7))
+      let fb_idx = ($LETTER_INDICES | get (($letter_start + $fallback_step) mod 7))
+      let fb_diff = ($abs_idx - $fb_idx + 12) mod 12
+      match $fb_diff {
+        0 => $fb_letter,
+        1 => $"($fb_letter)#",
+        11 => $"($fb_letter)b",
+        _ => (error make {msg: $"Cannot spell note at interval ($interval) from ($root)"})
+      }
     }
   }
 }
@@ -341,7 +381,7 @@ export def "piano chord" [root: string, quality: string, ...extra_args: string]:
     $args = ($args | skip 1)
   }
 
-  mut intervals = (chord-intervals $quality $extension)
+  mut chord = (chord-intervals $quality $extension)
 
   # Parse optional inversion (e.g. "1st Inversion")
   if ($args | is-not-empty) {
@@ -357,13 +397,13 @@ export def "piano chord" [root: string, quality: string, ...extra_args: string]:
     if ($args | is-not-empty) and ($args | first) == "Inversion" {
       $args = ($args | skip 1)
     }
-    $intervals = (apply-inversion $intervals $inv_num)
+    $chord = (apply-inversion $chord $inv_num)
   }
 
   if ($args | is-not-empty) {
     error make {msg: $"Unexpected arguments: ($args | str join ' ')"}
   }
 
-  let notes = compute-notes $root $intervals
+  let notes = compute-notes $root $chord.semitones --letter-steps $chord.letters
   piano notes ...$notes
 }

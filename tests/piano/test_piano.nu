@@ -163,6 +163,18 @@ let c_aug_expected = [
 
 assert equal (piano chord C Augmented) $c_aug_expected "C Augmented chord"
 
+let cs_dim_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┐"
+  "│  │●│ │ │  │  │ │ │ │ │ │  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │"
+  "│   │   │ ● │   │ ● │   │   │"
+  "│ C │ D │ E │ F │ G │ A │ B │"
+  "└───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord "C#" Diminished) $cs_dim_expected "C# Diminished chord"
+
 # --- Extended chords (7th, 9th, 13th) ---
 
 let c_major_7th_expected = [
