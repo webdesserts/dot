@@ -137,32 +137,82 @@ export def auto-range [notes: list<string>]: nothing -> record<start: int, end: 
   {start: $left, end: $right}
 }
 
-# Render the top border row: ┌──┬─┬─┬─┬──┐
+# Get the list of white key absolute indices within a range
+export def white-keys-in-range [start: int, end: int]: nothing -> list<int> {
+  $start..$end | where {|i| not (is-black ($i mod 12))}
+}
+
 export def render-top-border [widths: list<int>]: nothing -> string {
-  ""
+  let cells = $widths | each {|w| "" | fill -c "─" -w $w}
+  $"┌($cells | str join '┬')┐"
 }
 
-# Render a top-section body row with optional highlights on black keys
 export def render-top-body [widths: list<int>, highlights: list<bool>]: nothing -> string {
-  ""
+  let cells = $widths | enumerate | each {|e|
+    if ($highlights | get $e.index) {
+      if $e.item == 1 { "*" } else { "*" + ("" | fill -w ($e.item - 1)) }
+    } else {
+      "" | fill -w $e.item
+    }
+  }
+  $"│($cells | str join '│')│"
 }
 
-# Render the transition row where black keys end and white keys begin
+# Build the transition row where black keys end and white keys widen.
+# Each chromatic key contributes its content, and separators depend on the
+# black/white boundary between adjacent keys.
 export def render-transition [start: int, end: int]: nothing -> string {
-  ""
+  let widths = key-widths $start $end
+  let count = $end - $start + 1
+
+  mut chars = "│"
+  for i in 0..<$count {
+    let idx = ($start + $i) mod 12
+    let w = $widths | get $i
+
+    # Key content
+    if (is-black $idx) {
+      $chars = $"($chars)┬"
+    } else {
+      $chars = $chars + ("" | fill -w $w)
+    }
+
+    # Separator to next key (if not the last)
+    if $i < ($count - 1) {
+      let next_idx = ($start + $i + 1) mod 12
+      let cur_black = is-black $idx
+      let next_black = is-black $next_idx
+      if (not $cur_black) and $next_black {
+        $chars = $"($chars)└"
+      } else if $cur_black and (not $next_black) {
+        $chars = $"($chars)┘"
+      } else {
+        $chars = $"($chars)│"
+      }
+    }
+  }
+
+  $"($chars)│"
 }
 
-# Render a bottom-section body row with optional highlights on white keys
 export def render-bottom-body [start: int, end: int, highlights: list<bool>]: nothing -> string {
-  ""
+  let whites = white-keys-in-range $start $end
+  let cells = $whites | enumerate | each {|e|
+    if ($highlights | get $e.index) { " * " } else { "   " }
+  }
+  $"│($cells | str join '│')│"
 }
 
-# Render the bottom label row with note names
 export def render-bottom-labels [start: int, end: int]: nothing -> string {
-  ""
+  let whites = white-keys-in-range $start $end
+  let cells = $whites | each {|i|
+    let name = index-to-name ($i mod 12)
+    $" ($name) "
+  }
+  $"│($cells | str join '│')│"
 }
 
-# Render the bottom border row: └───┴───┴───┘
 export def render-bottom-border [count: int]: nothing -> string {
-  ""
+  let cells = 0..<$count | each { "───" }
+  $"└($cells | str join '┴')┘"
 }
