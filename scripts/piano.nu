@@ -157,7 +157,7 @@ export def render-top-border [widths: list<int>]: nothing -> string {
 export def render-top-body [widths: list<int>, highlights: list<bool>]: nothing -> string {
   let cells = $widths | enumerate | each {|e|
     if ($highlights | get $e.index) {
-      if $e.item == 1 { "*" } else { "*" + ("" | fill -w ($e.item - 1)) }
+      if $e.item == 1 { "●" } else { "●" + ("" | fill -w ($e.item - 1)) }
     } else {
       "" | fill -w $e.item
     }
@@ -205,7 +205,7 @@ export def render-transition [start: int, end: int]: nothing -> string {
 export def render-bottom-body [start: int, end: int, highlights: list<bool>]: nothing -> string {
   let whites = white-keys-in-range $start $end
   let cells = $whites | enumerate | each {|e|
-    if ($highlights | get $e.index) { " * " } else { "   " }
+    if ($highlights | get $e.index) { " ● " } else { "   " }
   }
   $"│($cells | str join '│')│"
 }

@@ -13,7 +13,7 @@ assert equal (render-top-body $widths_ce $highlights_ce) "│  │ │ │ │  
 
 # Top body: C# highlighted
 let hl_cs = [false, true, false, false, false]
-assert equal (render-top-body $widths_ce $hl_cs) "│  │*│ │ │  │"
+assert equal (render-top-body $widths_ce $hl_cs) "│  │●│ │ │  │"
 
 # Transition row: shows where black keys end and white keys widen
 assert equal (render-transition 0 4) "│  └┬┘ └┬┘  │"
@@ -24,7 +24,7 @@ assert equal (render-bottom-body 0 4 $white_hl_ce) "│   │   │   │"
 
 # Bottom body: D highlighted
 let white_hl_d = [false, true, false]
-assert equal (render-bottom-body 0 4 $white_hl_d) "│   │ * │   │"
+assert equal (render-bottom-body 0 4 $white_hl_d) "│   │ ● │   │"
 
 # Bottom labels
 assert equal (render-bottom-labels 0 4) "│ C │ D │ E │"
