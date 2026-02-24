@@ -20,3 +20,23 @@ export def index-to-name [index: int]: nothing -> string {
 export def is-black [index: int]: nothing -> bool {
   $index in $BLACK_KEYS
 }
+
+# Get the semitone intervals for a named scale
+export def scale-intervals [name: string]: nothing -> list<int> {
+  []
+}
+
+# Get the semitone intervals for a named chord
+export def chord-intervals [name: string]: nothing -> list<int> {
+  []
+}
+
+# Apply an inversion to a list of intervals by rotating the bottom N notes up an octave
+export def apply-inversion [intervals: list<int>, inversion: int]: nothing -> list<int> {
+  []
+}
+
+# Given a root note name and intervals, compute the list of note names
+export def compute-notes [root: string, intervals: list<int>]: nothing -> list<string> {
+  []
+}
