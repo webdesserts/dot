@@ -163,6 +163,68 @@ let c_aug_expected = [
 
 assert equal (piano chord C Augmented) $c_aug_expected "C Augmented chord"
 
+# --- Extended chords (7th, 9th, 13th) ---
+
+let c_major_7th_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┐"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │"
+  "│ ● │   │ ● │   │ ● │   │ ● │"
+  "│ C │ D │ E │ F │ G │ A │ B │"
+  "└───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord C Major 7th) $c_major_7th_expected "C Major 7th chord"
+
+let c_minor_7th_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┐"
+  "│  │ │ │●│  │  │ │ │ │ │●│  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │"
+  "│ ● │   │   │   │ ● │   │   │"
+  "│ C │ D │ E │ F │ G │ A │ B │"
+  "└───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord C Minor 7th) $c_minor_7th_expected "C Minor 7th chord"
+
+let c_dom_7th_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┐"
+  "│  │ │ │ │  │  │ │ │ │ │●│  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │"
+  "│ ● │   │ ● │   │ ● │   │   │"
+  "│ C │ D │ E │ F │ G │ A │ B │"
+  "└───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord C Dominant 7th) $c_dom_7th_expected "C Dominant 7th chord"
+
+let c_dom_9th_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┬──┬─┬─┬─┬──┐"
+  "│  │ │ │ │  │  │ │ │ │ │●│  │  │ │ │ │  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │  │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │  └┬┘ └┬┘  │"
+  "│ ● │   │ ● │   │ ● │   │   │   │ ● │   │"
+  "│ C │ D │ E │ F │ G │ A │ B │ C │ D │ E │"
+  "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord C Dominant 9th) $c_dom_9th_expected "C Dominant 9th chord"
+
+let c_dom_13th_expected = [
+  "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┬──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┐"
+  "│  │ │ │ │  │  │ │ │ │ │●│  │  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  │ │ │ │  │  │ │ │ │ │ │  │  │ │ │ │  │  │ │ │ │ │ │  │"
+  "│  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │  └┬┘ └┬┘  │  └┬┘ └┬┘ └┬┘  │"
+  "│ ● │   │ ● │   │ ● │   │   │   │ ● │   │ ● │   │ ● │   │"
+  "│ C │ D │ E │ F │ G │ A │ B │ C │ D │ E │ F │ G │ A │ B │"
+  "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
+] | str join "\n"
+
+assert equal (piano chord C Dominant 13th) $c_dom_13th_expected "C Dominant 13th chord"
+
 # --- Explicit range flags ---
 
 let d_g_range_expected = [
@@ -183,7 +245,7 @@ try { piano notes } catch {|e| assert ($e.msg | str contains "No notes provided"
 try { piano notes H } catch {|e| assert ($e.msg | str contains "Unknown note") "expected Unknown note error" }
 try { piano scale C Blues } catch {|e| assert ($e.msg | str contains "Unknown scale") "expected Unknown scale error" }
 try { piano chord C Thirteenth } catch {|e| assert ($e.msg | str contains "Unknown chord") "expected Unknown chord error" }
-try { piano chord C Major 4th Inversion } catch {|e| assert ($e.msg | str contains "Unknown inversion") "expected Unknown inversion error" }
+try { piano chord C Major 4th Inversion } catch {|e| assert ($e.msg | str contains "Unknown argument") "expected Unknown argument error" }
 try { piano notes C --range C } catch {|e| assert ($e.msg | str contains "must be used together") "expected must be used together error" }
 
 print "All piano tests passed!"

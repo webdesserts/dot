@@ -38,14 +38,33 @@ def scale-intervals [name: string] {
   }
 }
 
-# Get the semitone intervals for a named chord
-def chord-intervals [name: string] {
-  match ($name | str capitalize) {
+# Get the semitone intervals for a named chord with optional extension (7th, 9th, 11th, 13th)
+def chord-intervals [quality: string, extension: string = ""] {
+  let key = if $extension == "" {
+    $quality | str capitalize
+  } else {
+    $"($quality | str capitalize) ($extension)"
+  }
+  match $key {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
     "Diminished" => [0, 3, 6],
     "Augmented" => [0, 4, 8],
-    _ => (error make {msg: $"Unknown chord: \"($name)\". Supported: Major, Minor, Diminished, Augmented"})
+    "Major 7th" => [0, 4, 7, 11],
+    "Minor 7th" => [0, 3, 7, 10],
+    "Dominant 7th" => [0, 4, 7, 10],
+    "Diminished 7th" => [0, 3, 6, 9],
+    "Half-diminished 7th" => [0, 3, 6, 10],
+    "Major 9th" => [0, 4, 7, 11, 14],
+    "Minor 9th" => [0, 3, 7, 10, 14],
+    "Dominant 9th" => [0, 4, 7, 10, 14],
+    "Major 11th" => [0, 4, 7, 11, 14, 17],
+    "Minor 11th" => [0, 3, 7, 10, 14, 17],
+    "Dominant 11th" => [0, 4, 7, 10, 14, 17],
+    "Major 13th" => [0, 4, 7, 11, 14, 17, 21],
+    "Minor 13th" => [0, 3, 7, 10, 14, 17, 21],
+    "Dominant 13th" => [0, 4, 7, 10, 14, 17, 21],
+    _ => (error make {msg: $"Unknown chord: \"($key)\". Supported: Major, Minor, Diminished, Augmented, and 7th/9th/11th/13th extensions"})
   }
 }
 
@@ -311,20 +330,38 @@ export def "piano scale" [root: string, name: string]: nothing -> string {
   piano notes ...($notes | append $root)
 }
 
-# Generate a keyboard diagram for a named chord, with optional inversion
-export def "piano chord" [root: string, name: string, ...inversion_args: string]: nothing -> string {
-  mut intervals = chord-intervals $name
+# Generate a keyboard diagram for a named chord, with optional extension and inversion
+export def "piano chord" [root: string, quality: string, ...extra_args: string]: nothing -> string {
+  mut args = $extra_args
+  mut extension = ""
 
-  # Parse optional "1st Inversion" or "2nd Inversion" from extra args
-  if ($inversion_args | length) >= 1 {
-    let inv_str = $inversion_args | first
+  # Parse optional extension (7th, 9th, 11th, 13th)
+  if ($args | is-not-empty) and ($args | first) in ["7th", "9th", "11th", "13th"] {
+    $extension = ($args | first)
+    $args = ($args | skip 1)
+  }
+
+  mut intervals = (chord-intervals $quality $extension)
+
+  # Parse optional inversion (e.g. "1st Inversion")
+  if ($args | is-not-empty) {
+    let inv_str = $args | first
     let inv_num = match $inv_str {
       "1st" => 1,
       "2nd" => 2,
       "3rd" => 3,
-      _ => (error make {msg: $"Unknown inversion: \"($inv_str)\". Use 1st, 2nd, or 3rd"})
+      _ => (error make {msg: $"Unknown argument: \"($inv_str)\". Expected an extension or inversion"})
+    }
+    $args = ($args | skip 1)
+    # Consume optional "Inversion" word
+    if ($args | is-not-empty) and ($args | first) == "Inversion" {
+      $args = ($args | skip 1)
     }
     $intervals = (apply-inversion $intervals $inv_num)
+  }
+
+  if ($args | is-not-empty) {
+    error make {msg: $"Unexpected arguments: ($args | str join ' ')"}
   }
 
   let notes = compute-notes $root $intervals
