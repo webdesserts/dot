@@ -101,36 +101,43 @@ export def key-widths [start: int, end: int]: nothing -> list<int> {
 }
 
 # Compute the chromatic start/end range for a set of note names.
-# Extends left to the nearest group boundary (C or F) and right to cover the octave.
+# Places notes in ascending order, then extends to the nearest group boundaries
+# (CDE / FGAB) on each side.
 export def auto-range [notes: list<string>]: nothing -> record<start: int, end: int> {
   let root_idx = note-to-index ($notes | first)
-  let octave = $root_idx + 12
-  let root_mod = $root_idx mod 12
 
-  # Left edge: nearest group start (C=0 or F=5) strictly before root.
-  # If root IS a group start, go one further back.
+  # Place notes in ascending order to find actual span
+  mut current = $root_idx
+  mut max_note = $root_idx
+  for n in $notes {
+    let mod_idx = note-to-index $n
+    $current = $current + (($mod_idx - ($current mod 12) + 12) mod 12)
+    if $current > $max_note { $max_note = $current }
+  }
+  let min_note = $root_idx
+  let max_note_val = $max_note
+  let min_mod = $min_note mod 12
+  let max_mod = $max_note_val mod 12
+
+  # Left edge: nearest group start (C=0 or F=5) at or before min_note.
+  # If min IS a group start, go one further back for padding.
   let group_starts = [0, 5]  # C and F within one octave
-  let left = if $root_mod == 0 {
-    # Root is C — go back to F in previous octave, but floor at 0
-    [($root_idx - 7), 0] | math max
-  } else if $root_mod == 5 {
-    # Root is F — go back to C in same octave
-    $root_idx - 5
+  let left = if $min_mod == 0 {
+    [($min_note - 7), 0] | math max
+  } else if $min_mod == 5 {
+    $min_note - 5
   } else {
-    # Find nearest C or F below root
-    $group_starts | each {|gs| $root_idx - (($root_mod - $gs + 12) mod 12)} | math max
+    $group_starts | each {|gs| $min_note - (($min_mod - $gs + 12) mod 12)} | math max
   }
 
-  # Right edge: if octave lands on a group start (C or F), end there.
+  # Right edge: if max lands on a group start (C or F), end there.
   # Otherwise extend to nearest group end (E=4 or B=11).
-  let octave_mod = $octave mod 12
-  let right = if $octave_mod in $group_starts {
-    $octave
+  let right = if $max_mod in $group_starts {
+    $max_note_val
   } else {
     let group_ends = [4, 11]  # E and B within one octave
     $group_ends | each {|ge|
-      let candidate = $octave + (($ge - $octave_mod + 12) mod 12)
-      $candidate
+      $max_note_val + (($ge - $max_mod + 12) mod 12)
     } | math min
   }
 
@@ -277,14 +284,7 @@ export def "piano notes" [...notes: string, --range: string, --range-end: string
     auto-range $note_list
   }
 
-  mut highlight_indices = (notes-to-abs-indices $note_list $rng.start)
-
-  # Add the root's octave repeat if it falls within the range
-  let root_octave = ($highlight_indices | first) + 12
-  if $root_octave <= $rng.end {
-    $highlight_indices = ($highlight_indices | append $root_octave)
-  }
-
+  let highlight_indices = notes-to-abs-indices $note_list $rng.start
   render-keyboard $rng.start $rng.end $highlight_indices
 }
 
@@ -292,7 +292,8 @@ export def "piano notes" [...notes: string, --range: string, --range-end: string
 export def "piano scale" [root: string, name: string]: nothing -> string {
   let intervals = scale-intervals $name
   let notes = compute-notes $root $intervals
-  piano notes ...$notes
+  # Include the octave of the root to complete the scale
+  piano notes ...($notes | append $root)
 }
 
 # Generate a keyboard diagram for a named chord, with optional inversion

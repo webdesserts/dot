@@ -1,7 +1,7 @@
 use std/assert
 use /Users/michael/.dots/webdesserts/scripts/piano.nu ["piano notes", "piano scale", "piano chord"]
 
-# D Major scale reference from Piano Studies
+# D Major scale reference from Piano Studies (via piano scale, includes octave repeat)
 let d_major_expected = [
   "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┬──┬─┬─┬─┬──┐"
   "│  │ │ │ │  │  │*│ │ │ │ │  │  │*│ │ │  │"
@@ -12,8 +12,7 @@ let d_major_expected = [
   "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
 ] | str join "\n"
 
-let d_major_result = piano notes D E "F#" G A B "C#"
-assert equal $d_major_result $d_major_expected "D Major diagram mismatch"
+assert equal (piano scale D Major) $d_major_expected "D Major scale"
 
 # Bb Major scale reference
 let bb_major_expected = [
@@ -26,10 +25,9 @@ let bb_major_expected = [
   "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
 ] | str join "\n"
 
-let bb_major_result = piano notes Bb C D Eb F G A
-assert equal $bb_major_result $bb_major_expected "Bb Major diagram mismatch"
+assert equal (piano scale Bb Major) $bb_major_expected "Bb Major scale"
 
-# Eb Major scale reference
+# Eb Major scale reference (corrected bottom body from Piano Studies)
 let eb_major_expected = [
   "┌──┬─┬─┬─┬──┬──┬─┬─┬─┬─┬─┬──┬──┬─┬─┬─┬──┐"
   "│  │ │ │*│  │  │ │ │*│ │*│  │  │ │ │*│  │"
@@ -40,8 +38,7 @@ let eb_major_expected = [
   "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
 ] | str join "\n"
 
-let eb_major_result = piano notes Eb F G Ab Bb C D
-assert equal $eb_major_result $eb_major_expected "Eb Major diagram mismatch"
+assert equal (piano scale Eb Major) $eb_major_expected "Eb Major scale"
 
 # F natural minor scale reference
 let f_minor_expected = [
@@ -54,16 +51,23 @@ let f_minor_expected = [
   "└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘"
 ] | str join "\n"
 
-let f_minor_result = piano notes F G Ab Bb C Db Eb
-assert equal $f_minor_result $f_minor_expected "F minor diagram mismatch"
+assert equal (piano scale F Minor) $f_minor_expected "F minor scale"
 
-# Test scale subcommand
-let d_major_via_scale = piano scale D Major
-assert equal $d_major_via_scale $d_major_expected "D Major via scale subcommand"
+# Single note: minimal range
+let c_sharp_expected = [
+  "┌──┬─┬─┬─┬──┐"
+  "│  │*│ │ │  │"
+  "│  │ │ │ │  │"
+  "│  └┬┘ └┬┘  │"
+  "│   │   │   │"
+  "│ C │ D │ E │"
+  "└───┴───┴───┘"
+] | str join "\n"
 
-# Test chord subcommand
+assert equal (piano notes "C#") $c_sharp_expected "Single note C#"
+
+# Chord subcommand
 let f_major_chord = piano chord F Major
-# F Major triad: F, A, C — just verify it produces valid output
 assert ($f_major_chord | str contains "│ * │") "F Major chord should highlight white keys"
 
 print "All integration tests passed!"

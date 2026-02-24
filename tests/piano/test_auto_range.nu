@@ -1,22 +1,28 @@
 use std/assert
 use /Users/michael/.dots/webdesserts/scripts/piano.nu *
 
-# D Major: root D in CDE group, left→C(0), octave D(14) not group start→extend to E(16)
+# Single note: C# → just the CDE group
+assert equal (auto-range ["C#"]) {start: 0, end: 4}
+
+# D Major scale (7 notes, no octave): span D(2)→C#(13), extends to C(0)→E(16)
 assert equal (auto-range ["D", "E", "F#", "G", "A", "B", "C#"]) {start: 0, end: 16}
 
-# Bb Major: root Bb in FGAB group, left→F(5), octave Bb(22) not group start→extend to B(23)
-assert equal (auto-range ["Bb", "C", "D", "Eb", "F", "G", "A"]) {start: 5, end: 23}
+# D Major scale with octave (8 notes): span D(2)→D(14), same range C(0)→E(16)
+assert equal (auto-range ["D", "E", "F#", "G", "A", "B", "C#", "D"]) {start: 0, end: 16}
 
-# F minor: root F IS group start→left goes back to C(0), octave F(17) IS group start→end at F(17)
-assert equal (auto-range ["F", "G", "Ab", "Bb", "C", "Db", "Eb"]) {start: 0, end: 17}
+# Bb Major with octave: span Bb(10)→Bb(22), left→F(5), right→B(23)
+assert equal (auto-range ["Bb", "C", "D", "Eb", "F", "G", "A", "Bb"]) {start: 5, end: 23}
 
-# Eb Major: root Eb in CDE group, left→C(0), octave Eb(15) not group start→extend to E(16)
-assert equal (auto-range ["Eb", "F", "G", "Ab", "Bb", "C", "D"]) {start: 0, end: 16}
+# F minor with octave: span F(5)→F(17), left→C(0), F(17) IS group start→end at F(17)
+assert equal (auto-range ["F", "G", "Ab", "Bb", "C", "Db", "Eb", "F"]) {start: 0, end: 17}
 
-# C Major: root C IS group start but C(0) is minimum→stay at C(0), octave C(12) IS group start→end at C(12)
-assert equal (auto-range ["C", "D", "E", "F", "G", "A", "B"]) {start: 0, end: 12}
+# Eb Major with octave: span Eb(3)→Eb(15), left→C(0), right→E(16)
+assert equal (auto-range ["Eb", "F", "G", "Ab", "Bb", "C", "D", "Eb"]) {start: 0, end: 16}
 
-# F Major: root F IS group start→left to C(0), octave F(17) IS group start→end at F(17)
-assert equal (auto-range ["F", "G", "A", "Bb", "C", "D", "E"]) {start: 0, end: 17}
+# C Major with octave: span C(0)→C(12), left→C(0) (floor), C(12) IS group start→end at C(12)
+assert equal (auto-range ["C", "D", "E", "F", "G", "A", "B", "C"]) {start: 0, end: 12}
+
+# F Major chord: span F(5)→C(12), left→C(0), C(12) IS group start→end at C(12)
+assert equal (auto-range ["F", "A", "C"]) {start: 0, end: 12}
 
 print "All auto-range tests passed!"
