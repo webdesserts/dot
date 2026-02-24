@@ -8,7 +8,7 @@ assert equal (key-widths 0 11) [2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2]
 assert equal (key-widths 0 4) [2, 1, 1, 1, 2]
 
 # Range D-A: D gets +1 left (C# cut off), A gets +1 right (Bb cut off)
-assert equal (key-widths 2 9) [2, 1, 1, 1, 2, 2, 1, 1]
+assert equal (key-widths 2 9) [2, 1, 2, 2, 1, 1, 1, 2]
 
 # Range F-B: F is clean on left (no black key between E and F), B is clean on right
 assert equal (key-widths 5 11) [2, 1, 1, 1, 1, 1, 2]

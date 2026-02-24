@@ -78,6 +78,24 @@ export def compute-notes [root: string, intervals: list<int>]: nothing -> list<s
 # Compute the top-row width of each chromatic key in a range.
 # start/end are absolute chromatic indices (can exceed 11 for multi-octave).
 # Edge white keys gain +1 width when their adjacent black key is cut off by the range boundary.
+# Base top-row widths for one octave (C through B).
+# White keys next to a natural half-step (B-C, E-F) get 2; others get 1.
+const BASE_WIDTHS = [2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2]
+
 export def key-widths [start: int, end: int]: nothing -> list<int> {
-  []
+  let count = $end - $start + 1
+  mut widths = (0..<$count | each {|i| $BASE_WIDTHS | get (($start + $i) mod 12)})
+
+  # Left edge: if the key just before start is black, the first key absorbs its space
+  if (is-black (($start - 1 + 12) mod 12)) {
+    $widths = ($widths | enumerate | each {|e| if $e.index == 0 { $e.item + 1 } else { $e.item }})
+  }
+
+  # Right edge: if the key just after end is black, the last key absorbs its space
+  if (is-black (($end + 1) mod 12)) {
+    let last = ($count - 1)
+    $widths = ($widths | enumerate | each {|e| if $e.index == $last { $e.item + 1 } else { $e.item }})
+  }
+
+  $widths
 }
