@@ -99,3 +99,9 @@ export def key-widths [start: int, end: int]: nothing -> list<int> {
 
   $widths
 }
+
+# Compute the chromatic start/end range for a set of note names.
+# Extends left to the nearest group boundary (C or F) and right to cover the octave.
+export def auto-range [notes: list<string>]: nothing -> record<start: int, end: int> {
+  {start: -1, end: -1}
+}
