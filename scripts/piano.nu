@@ -11,7 +11,7 @@ const LETTER_INDICES = [0, 2, 4, 5, 7, 9, 11]
 const SEMITONE_TO_LETTER_STEP = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6]
 
 # Convert a note name (e.g. "C", "C#", "Bb") to a chromatic index (0-11)
-export def note-to-index [note: string] {
+def note-to-index [note: string] {
   let sharp_match = ($SHARP_NAMES | enumerate | where item == $note)
   if ($sharp_match | is-not-empty) { return ($sharp_match | get index | first) }
   let flat_match = ($FLAT_NAMES | enumerate | where item == $note)
@@ -20,17 +20,17 @@ export def note-to-index [note: string] {
 }
 
 # Convert a chromatic index (0-11) to its canonical sharp name
-export def index-to-name [index: int]: nothing -> string {
+def index-to-name [index: int]: nothing -> string {
   $SHARP_NAMES | get $index
 }
 
 # Returns true if the given chromatic index is a black key
-export def is-black [index: int]: nothing -> bool {
+def is-black [index: int]: nothing -> bool {
   $index in $BLACK_KEYS
 }
 
 # Get the semitone intervals for a named scale
-export def scale-intervals [name: string] {
+def scale-intervals [name: string] {
   match ($name | str capitalize) {
     "Major" => [0, 2, 4, 5, 7, 9, 11],
     "Minor" => [0, 2, 3, 5, 7, 8, 10],
@@ -39,7 +39,7 @@ export def scale-intervals [name: string] {
 }
 
 # Get the semitone intervals for a named chord
-export def chord-intervals [name: string] {
+def chord-intervals [name: string] {
   match ($name | str capitalize) {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
@@ -48,7 +48,7 @@ export def chord-intervals [name: string] {
 }
 
 # Apply an inversion by rotating the bottom N notes up an octave
-export def apply-inversion [intervals: list<int>, inversion: int]: nothing -> list<int> {
+def apply-inversion [intervals: list<int>, inversion: int]: nothing -> list<int> {
   mut result = $intervals
   for _ in 0..<$inversion {
     let bottom = $result | first
@@ -59,7 +59,7 @@ export def apply-inversion [intervals: list<int>, inversion: int]: nothing -> li
 
 # Given a root note and intervals, compute note names using correct enharmonic spelling.
 # Uses the standard semitone-to-letter-step mapping so chords and scales both spell correctly.
-export def compute-notes [root: string, intervals: list<int>]: nothing -> list<string> {
+def compute-notes [root: string, intervals: list<int>]: nothing -> list<string> {
   let root_idx = note-to-index $root
   let root_letter = $root | split chars | first
   let letter_start = ($LETTERS | enumerate | where item == $root_letter | get index | first)
@@ -87,7 +87,7 @@ export def compute-notes [root: string, intervals: list<int>]: nothing -> list<s
 # White keys next to a natural half-step (B-C, E-F) get 2; others get 1.
 const BASE_WIDTHS = [2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2]
 
-export def key-widths [start: int, end: int]: nothing -> list<int> {
+def key-widths [start: int, end: int]: nothing -> list<int> {
   let count = $end - $start + 1
   mut widths = (0..<$count | each {|i| $BASE_WIDTHS | get (($start + $i) mod 12)})
 
@@ -108,7 +108,7 @@ export def key-widths [start: int, end: int]: nothing -> list<int> {
 # Compute the chromatic start/end range for a set of note names.
 # Places notes in ascending order, then extends to the nearest group boundaries
 # (CDE / FGAB) on each side.
-export def auto-range [notes: list<string>]: nothing -> record<start: int, end: int> {
+def auto-range [notes: list<string>]: nothing -> record<start: int, end: int> {
   let root_idx = note-to-index ($notes | first)
 
   # Place notes in ascending order to find actual span
@@ -150,16 +150,16 @@ export def auto-range [notes: list<string>]: nothing -> record<start: int, end: 
 }
 
 # Get the list of white key absolute indices within a range
-export def white-keys-in-range [start: int, end: int]: nothing -> list<int> {
+def white-keys-in-range [start: int, end: int]: nothing -> list<int> {
   $start..$end | where {|i| not (is-black ($i mod 12))}
 }
 
-export def render-top-border [widths: list<int>]: nothing -> string {
+def render-top-border [widths: list<int>]: nothing -> string {
   let cells = $widths | each {|w| "" | fill -c "─" -w $w}
   $"┌($cells | str join '┬')┐"
 }
 
-export def render-top-body [widths: list<int>, highlights: list<bool>]: nothing -> string {
+def render-top-body [widths: list<int>, highlights: list<bool>]: nothing -> string {
   let cells = $widths | enumerate | each {|e|
     if ($highlights | get $e.index) {
       if $e.item == 1 { "●" } else { "●" + ("" | fill -w ($e.item - 1)) }
@@ -173,7 +173,7 @@ export def render-top-body [widths: list<int>, highlights: list<bool>]: nothing 
 # Build the transition row where black keys end and white keys widen.
 # Each chromatic key contributes its content, and separators depend on the
 # black/white boundary between adjacent keys.
-export def render-transition [start: int, end: int]: nothing -> string {
+def render-transition [start: int, end: int]: nothing -> string {
   let widths = key-widths $start $end
   let count = $end - $start + 1
 
@@ -207,7 +207,7 @@ export def render-transition [start: int, end: int]: nothing -> string {
   $"($chars)│"
 }
 
-export def render-bottom-body [start: int, end: int, highlights: list<bool>]: nothing -> string {
+def render-bottom-body [start: int, end: int, highlights: list<bool>]: nothing -> string {
   let whites = white-keys-in-range $start $end
   let cells = $whites | enumerate | each {|e|
     if ($highlights | get $e.index) { " ● " } else { "   " }
@@ -215,7 +215,7 @@ export def render-bottom-body [start: int, end: int, highlights: list<bool>]: no
   $"│($cells | str join '│')│"
 }
 
-export def render-bottom-labels [start: int, end: int]: nothing -> string {
+def render-bottom-labels [start: int, end: int]: nothing -> string {
   let whites = white-keys-in-range $start $end
   let cells = $whites | each {|i|
     let name = index-to-name ($i mod 12)
@@ -224,13 +224,13 @@ export def render-bottom-labels [start: int, end: int]: nothing -> string {
   $"│($cells | str join '│')│"
 }
 
-export def render-bottom-border [count: int]: nothing -> string {
+def render-bottom-border [count: int]: nothing -> string {
   let cells = 0..<$count | each { "───" }
   $"└($cells | str join '┴')┘"
 }
 
 # Assemble a complete keyboard diagram for the given highlighted note indices within a range
-export def render-keyboard [start: int, end: int, highlight_indices: list<int>]: nothing -> string {
+def render-keyboard [start: int, end: int, highlight_indices: list<int>]: nothing -> string {
   let widths = key-widths $start $end
   let count = $end - $start + 1
 
