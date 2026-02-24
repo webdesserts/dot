@@ -11,10 +11,12 @@ const LETTER_INDICES = [0, 2, 4, 5, 7, 9, 11]
 const SEMITONE_TO_LETTER_STEP = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6]
 
 # Convert a note name (e.g. "C", "C#", "Bb") to a chromatic index (0-11)
-export def note-to-index [note: string]: nothing -> int {
+export def note-to-index [note: string] {
   let sharp_match = ($SHARP_NAMES | enumerate | where item == $note)
   if ($sharp_match | is-not-empty) { return ($sharp_match | get index | first) }
-  $FLAT_NAMES | enumerate | where item == $note | get index | first
+  let flat_match = ($FLAT_NAMES | enumerate | where item == $note)
+  if ($flat_match | is-not-empty) { return ($flat_match | get index | first) }
+  error make {msg: $"Unknown note: \"($note)\". Use C, C#, Db, D, ... B"}
 }
 
 # Convert a chromatic index (0-11) to its canonical sharp name
@@ -28,18 +30,20 @@ export def is-black [index: int]: nothing -> bool {
 }
 
 # Get the semitone intervals for a named scale
-export def scale-intervals [name: string]: nothing -> list<int> {
+export def scale-intervals [name: string] {
   match $name {
     "Major" => [0, 2, 4, 5, 7, 9, 11],
     "Minor" => [0, 2, 3, 5, 7, 8, 10],
+    _ => (error make {msg: $"Unknown scale: \"($name)\". Supported: Major, Minor"})
   }
 }
 
 # Get the semitone intervals for a named chord
-export def chord-intervals [name: string]: nothing -> list<int> {
+export def chord-intervals [name: string] {
   match $name {
     "Major" => [0, 4, 7],
     "Minor" => [0, 3, 7],
+    _ => (error make {msg: $"Unknown chord: \"($name)\". Supported: Major, Minor"})
   }
 }
 
@@ -301,12 +305,13 @@ export def "piano chord" [root: string, name: string, ...inversion_args: string]
   mut intervals = chord-intervals $name
 
   # Parse optional "1st Inversion" or "2nd Inversion" from extra args
-  if ($inversion_args | length) >= 2 {
+  if ($inversion_args | length) >= 1 {
     let inv_str = $inversion_args | first
     let inv_num = match $inv_str {
       "1st" => 1,
       "2nd" => 2,
       "3rd" => 3,
+      _ => (error make {msg: $"Unknown inversion: \"($inv_str)\". Use 1st, 2nd, or 3rd"})
     }
     $intervals = (apply-inversion $intervals $inv_num)
   }
