@@ -216,3 +216,100 @@ export def render-bottom-border [count: int]: nothing -> string {
   let cells = 0..<$count | each { "───" }
   $"└($cells | str join '┴')┘"
 }
+
+# Assemble a complete keyboard diagram for the given highlighted note indices within a range
+export def render-keyboard [start: int, end: int, highlight_indices: list<int>]: nothing -> string {
+  let widths = key-widths $start $end
+  let count = $end - $start + 1
+
+  # Top-section highlights: one bool per chromatic key
+  let top_highlights = 0..<$count | each {|i|
+    let idx = $start + $i
+    let mod_idx = $idx mod 12
+    (is-black $mod_idx) and ($idx in $highlight_indices)
+  }
+
+  # Bottom-section highlights: one bool per white key
+  let whites = white-keys-in-range $start $end
+  let bottom_highlights = $whites | each {|i| $i in $highlight_indices}
+
+  let white_count = $whites | length
+
+  # Build an empty top body row (no highlights) for spacing
+  let empty_top = 0..<$count | each { false }
+
+  [
+    (render-top-border $widths)
+    (render-top-body $widths $top_highlights)
+    (render-top-body $widths $empty_top)
+    (render-transition $start $end)
+    (render-bottom-body $start $end $bottom_highlights)
+    (render-bottom-labels $start $end)
+    (render-bottom-border $white_count)
+  ] | str join "\n"
+}
+
+# Convert note names to ascending absolute indices, each placed at the first
+# occurrence at or after the previous note. This correctly wraps notes like
+# C# in D Major to the next octave (index 13, not 1).
+def notes-to-abs-indices [notes: list<string>, start: int]: nothing -> list<int> {
+  mut current = $start
+  mut result = []
+  for n in $notes {
+    let mod_idx = note-to-index $n
+    let abs = $current + (($mod_idx - ($current mod 12) + 12) mod 12)
+    $result = ($result | append $abs)
+    $current = $abs
+  }
+  $result
+}
+
+# Generate a keyboard diagram highlighting the given notes
+export def "piano notes" [...notes: string, --range: string, --range-end: string]: nothing -> string {
+  let note_list = $notes
+
+  let rng = if $range != null and $range_end != null {
+    let s = note-to-index $range
+    let e_mod = note-to-index $range_end
+    let e = if $e_mod <= $s { $e_mod + 12 } else { $e_mod }
+    {start: $s, end: $e}
+  } else {
+    auto-range $note_list
+  }
+
+  mut highlight_indices = (notes-to-abs-indices $note_list $rng.start)
+
+  # Add the root's octave repeat if it falls within the range
+  let root_octave = ($highlight_indices | first) + 12
+  if $root_octave <= $rng.end {
+    $highlight_indices = ($highlight_indices | append $root_octave)
+  }
+
+  render-keyboard $rng.start $rng.end $highlight_indices
+}
+
+# Generate a keyboard diagram for a named scale
+export def "piano scale" [root: string, name: string]: nothing -> string {
+  let intervals = scale-intervals $name
+  let notes = compute-notes $root $intervals
+  piano notes ...$notes
+}
+
+# Generate a keyboard diagram for a named chord, with optional inversion
+export def "piano chord" [root: string, name: string, ...inversion_args: string]: nothing -> string {
+  mut intervals = chord-intervals $name
+
+  # Parse optional "1st Inversion" or "2nd Inversion" from extra args
+  if ($inversion_args | length) >= 2 {
+    let inv_str = $inversion_args | first
+    let inv_num = match $inv_str {
+      "1st" => 1,
+      "2nd" => 2,
+      "3rd" => 3,
+    }
+    $intervals = (apply-inversion $intervals $inv_num)
+  }
+
+  let notes = compute-notes $root $intervals
+  piano notes ...$notes
+}
