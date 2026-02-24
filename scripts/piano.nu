@@ -136,3 +136,33 @@ export def auto-range [notes: list<string>]: nothing -> record<start: int, end: 
 
   {start: $left, end: $right}
 }
+
+# Render the top border row: ┌──┬─┬─┬─┬──┐
+export def render-top-border [widths: list<int>]: nothing -> string {
+  ""
+}
+
+# Render a top-section body row with optional highlights on black keys
+export def render-top-body [widths: list<int>, highlights: list<bool>]: nothing -> string {
+  ""
+}
+
+# Render the transition row where black keys end and white keys begin
+export def render-transition [start: int, end: int]: nothing -> string {
+  ""
+}
+
+# Render a bottom-section body row with optional highlights on white keys
+export def render-bottom-body [start: int, end: int, highlights: list<bool>]: nothing -> string {
+  ""
+}
+
+# Render the bottom label row with note names
+export def render-bottom-labels [start: int, end: int]: nothing -> string {
+  ""
+}
+
+# Render the bottom border row: └───┴───┴───┘
+export def render-bottom-border [count: int]: nothing -> string {
+  ""
+}
