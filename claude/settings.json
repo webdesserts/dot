@@ -12,29 +12,14 @@
       "mcp__nushell",
       "Read(//Users/michael/notes/**)"
     ],
+    "defaultMode": "plan",
     "deny": [],
-    "ask": [
-      "Write(//Users/michael/notes/**)",
-      "Bash(git push:*)",
-      "Bash(git rebase:*)",
-      "Bash(git commit --amend:*)",
-      "Bash(git reset:*)",
-      "Bash(acli bitbucket pr create:*)",
-      "Bash(acli bitbucket pr edit:*)",
-      "Bash(acli bitbucket pr decline:*)",
-      "Bash(acli bitbucket pr comment create:*)",
-      "Bash(acli jira issue create:*)",
-      "Bash(acli jira issue update:*)",
-      "Bash(acli jira issue transition:*)",
-      "Bash(acli jira comment add:*)"
-    ],
-    "defaultMode": "plan"
+    "ask": []
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true
   },
   "alwaysThinkingEnabled": true,
-  "autoUpdatesChannel": "latest",
-  "effortLevel": "medium"
+  "effortLevel": "medium",
   "skipDangerousModePermissionPrompt": true
 }
