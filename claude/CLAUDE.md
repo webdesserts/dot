@@ -1,49 +1,22 @@
-# Claude Code Memory System Documentation
+# Claude Code Reference
 
-## How Claude Code Memory Works
+## Key Paths
 
-Claude Code uses a **hierarchical memory system** where files are automatically loaded when Claude Code launches:
+- **`~/CLAUDE.md`** - Machine-specific context (computer name, network, etc.)
+- **`~/.claude/CLAUDE.md`** - Personal global instructions (this file)
+- **`~/.claude.json`** - MCP server configuration
+- **`~/.claude/settings.json`** - Global permissions
+- **`./.claude/settings.json`** - Project permissions (team-shared)
+- **`./.claude/settings.local.json`** - Project permission overrides (git-ignored)
+- CLAUDE.md files can import other files with `@path/to/file` syntax (max 5 hops)
 
-### Memory Hierarchy (Precedence Order)
-
-1. **Enterprise Policy Memory** (System-wide)
-2. **Project Memory** (`./CLAUDE.md`) - Team-shared project instructions
-3. **User Memory** (`~/.claude/CLAUDE.md`) - Personal preferences across ALL projects
-4. **Local Project Memory** (`./CLAUDE.local.md`) - Personal notes for current project
-
-### Key Behaviors
-
-- **Higher-level memories take precedence** - project memories override user memories
-- **All memory files are automatically loaded** when Claude Code launches
-- **Files can import other files** using `@path/to/import` syntax (max 5 hops deep)
-- **Maximum import depth**: 5 hops to prevent circular references
-
-### File Purposes
-
-- **`~/.claude/CLAUDE.md`**: Personal workflow preferences across ALL projects
-- **`~/code/{company}/CLAUDE.md`**: Company/organization-specific conventions (e.g., `~/code/spatialkey/CLAUDE.md`)
-  - Applies to all projects under that company directory
-  - Git conventions, company tools, team practices
-  - Not in git - managed via dotfiles
-- **`./CLAUDE.md`**: Project-specific context, team conventions (can be gitignored or shared)
-- **`./CLAUDE.local.md`**: Personal working notes for current project (git-ignored)
-- **`TODO.md`**: Task management only (separate from memory system)
+**Project context preference**: Use Obsidian project notes instead of per-project CLAUDE.md files.
 
 ---
 
 ## Obsidian Memory
 
-**Search notes before answering questions.** When the user asks about ANY topic, check if information exists in notes first before relying on training data.
-
-- Use `get_note()` to check if a topic has a note, then Read the file path to view content
-- Use `get_graph_neighborhood()` to find related notes and explore connections
-- Trust note content over training data when they conflict
-
-**Session Log:** The log tracks chronological session activity. Use the `log()` tool to append entries (timestamps added automatically).
-
-@/Users/michael/notes/Log.md
-
-**Notetaking instructions:**
+@~/notes/Log.md
 
 @~/.dots/webdesserts-private/obsidian-memory/notetaking.md
 
@@ -88,107 +61,41 @@ Claude Code uses a **hierarchical memory system** where files are automatically 
 
 ---
 
-## Settings and Permissions
-
-**Documentation**: https://docs.claude.com/en/docs/claude-code/settings
-
-### Settings Files
-
-- **`~/.claude/settings.json`**: Global permissions across ALL projects (user-specific)
-- **`./.claude/settings.json`**: Project-specific permissions shared with team (can be committed to git)
-- **`./.claude/settings.local.json`**: Project-specific user overrides (git-ignored, takes precedence over team settings)
-
-### Permission Types
-
-- **`allow`**: No approval needed
-- **`ask`**: Requires user approval
-- **`deny`**: Blocked entirely
-
-### Common Patterns
-
-**Local operations (allowed):**
-
-- `Bash(git commit:*)`, `Bash(git add:*)` - local git operations
-- `Read(//path/**)` - reading files
-- `Bash(yarn test:*)` - running tests
-
-**Team-visible operations (require approval):**
-
-- `Bash(git push:*)` - pushing to remote
-- `Bash(git rebase:*)`, `Bash(git commit --amend:*)`, `Bash(git reset:*)` - git history changes
-- `Bash(acli bitbucket pr create:*)` - creating PRs
-- `Bash(acli jira issue create:*)`, `Bash(acli jira issue update:*)` - creating/updating tickets
-
----
-
 # Generic Workflow Guidelines
 
-## Commit Workflow - VERY IMPORTANT
+## Commit Workflow
 
-When making commits, follow these rules:
+**Commit automatically** after each reviewable unit of work. Never leave completed work uncommitted. Amend when fixing up the most recent commit, but check `git log origin/<branch>..HEAD` first — only amend unpushed commits.
 
-### Commit Message Format
+**TDD approach**: When adding new behavior or fixing bugs in projects with tests, write a failing test first to define the expected behavior, then implement. Each commit bundles tests and implementation for one logical change — this makes commits individually reviewable.
 
-- **Keep subject lines short and clear** - Describe what changed, not why
-- **Use extra description sparingly** - Only add detail when explaining bugs or linking important context
-- **No paragraphs** - Keep description concise, a few lines at most
-- **NEVER add attribution lines** - Do NOT include any of these:
-  - "Co-Authored-By: Claude <noreply@anthropic.com>"
-  - "Generated with [Claude Code](https://claude.com/claude-code)"
-  - Any similar attribution or signature lines
-- **Plain commit messages only** - Just the subject line and optional brief description, nothing else
+**Commit messages**: Short subject line describing what changed. Optional brief description for bugs or important context. No attribution lines.
 
-### Git Safety Rules
+**Git safety**: Never push without permission. Never force push to main/master. Never skip hooks. Never amend other developers' commits.
 
-- **NEVER push without permission** - Always ask before pushing to remote
-- **NEVER force push to main/master** - Warn user if they request it
-- **NEVER skip hooks** - Don't use --no-verify, --no-gpg-sign, etc. unless explicitly requested
-- **NEVER amend other developers' commits** - Only amend your own most recent commit if needed
+## Planning
 
-### Commit Strategy
+Beyond the original request, consider the broader impact of the changes. For small obvious improvements, just handle them. For larger scope additions, ask before including them in the plan.
 
-- **Small, standalone commits** - Break work into logical units that can be reviewed independently
-- **Atomic changes** - Each commit should be a complete, working change
-- **Clean history** - Enables easy rollback and clear project evolution
+- **Architectural impact**: How do these changes affect the larger system?
+- **Simplification opportunities**: If removing code, can surrounding code be simplified now that it's gone?
+- **Complexity and duplication**: If adding code, does it duplicate existing patterns? Would an abstraction reduce complexity, or would it be premature?
+- **UX impact**: Does the change negatively affect the user experience? Could it be integrated in a better way?
 
-### Example Workflow:
+Plans should include, as applicable:
 
-```
-Task: Implement local storage utilities
-✅ DO: Break into logical commits (utils → component → integration)
-❌ DON'T: Single massive commit with everything at once
-```
-
-### Why This Matters
-
-- Enables easy rollback of individual changes
-- Creates clean, navigable git history
-- Makes code review more effective
-- Allows bisecting to find when bugs were introduced
+- **Spec updates**: If the repo has cucumber-style specs, include the spec changes in the plan. Specs focus on the "user" experience — where "user" varies by context (end user, developer consuming a library, etc.).
+- **Test plan**: If the repo has tests, include a test plan. Tests are essential for validating your own changes. Similarly, leverage strict types, good logging, and visual testing when available.
+- **Commit plan**: List the commits you'll make, what each contains, and in what order. Commits follow the TDD approach described in Commit Workflow.
+- **Visual snapshots**: For UI changes, find a way to capture snapshots for review. After generating snapshots, **review them yourself** to verify they look as expected — don't skip this step.
 
 ## Implementation Approach - CRITICAL
 
 ### Major Design Decisions Require Approval
 
-- **Never drastically diverge** from the original implementation approach without explicit user approval
+- **Never drastically diverge** from the current plan or approach without explicit user approval
 - **Small technical decisions** (variable names, minor refactoring) are fine to make independently
-- **Major architectural changes** (completely different API design, alternative solutions) require sync
-
-### When to Sync with User
-
-✅ **OK to decide independently:**
-
-- Method/variable naming
-- Minor refactoring for clarity
-- Small bug fixes
-- Code organization improvements
-
-❌ **Must get approval first:**
-
-- Changing from suggested API design to completely different approach
-- Adding/removing major features from the original plan
-- Using different libraries/patterns than discussed
-- Abandoning complex solutions for simpler alternatives without discussion
+- **Major architectural changes** (completely different API design, swapping dependencies) require a conversation and maybe even a new plan.
 
 ### If You Encounter Technical Blockers
 
@@ -206,6 +113,11 @@ Task: Implement local storage utilities
 ❌ "Complex type inference is hard, so I'll make simple helper functions instead"
 ✅ "Complex type inference hit X technical issue. Options: A) Simpler helpers B) Different approach C) Solve complexity. Which do you prefer?"
 ```
+
+### Code Reuse and Discovery
+
+- **Search before creating**: Always look for existing types, utilities, and patterns before implementing new ones
+- **Reuse existing code**: Prefer extending or using existing solutions over creating duplicates
 
 ## Adversarial Loops
 
@@ -233,13 +145,6 @@ An adversarial loop is a self-review technique where you spawn a harsh critic ag
 ### Interpreting Results
 
 If the adversarial agent starts hallucinating issues or nitpicking trivialities, that's a signal your work is solid. The goal isn't to find problems — it's to surface problems that actually exist. A review that finds nothing damning is a successful review.
-
-## Development Principles
-
-### Code Reuse and Discovery
-
-- **Search before creating**: Always look for existing types, utilities, and patterns before implementing new ones
-- **Reuse existing code**: Prefer extending or using existing solutions over creating duplicates
 
 ## TypeScript Best Practices
 
