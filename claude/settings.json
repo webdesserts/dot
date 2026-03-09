@@ -35,6 +35,6 @@
   },
   "alwaysThinkingEnabled": true,
   "autoUpdatesChannel": "latest",
-  "skipDangerousModePermissionPrompt": true,
   "effortLevel": "medium"
+  "skipDangerousModePermissionPrompt": true
 }

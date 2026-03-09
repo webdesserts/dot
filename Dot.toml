@@ -23,5 +23,6 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/Library/Application Support/Code/User/keybindings.json" = "vscode_keybindings.jsonc"
 "~/.claude/CLAUDE.md" = "claude/CLAUDE.md"
 "~/.claude/settings.json" = "claude/settings.json"
+"~/.claude/skills" = "claude/skills"
 "~/.config/opencode/AGENTS.md" = "opencode/AGENTS.md"
 "/etc/sysctl.conf" = "sysctl.conf"
