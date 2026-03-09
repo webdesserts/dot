@@ -1,5 +1,21 @@
 # Piano keyboard diagram generator for Obsidian music notes
 
+# Piano keyboard diagram generator. Run `piano` for usage info.
+export def main [] {
+  print "Piano keyboard diagram generator"
+  print ""
+  print "Usage:"
+  print "  piano notes <...notes>     - Highlight specific notes on a keyboard"
+  print "  piano scale <root> <name>  - Show a named scale (Major, Minor)"
+  print "  piano chord <root> <quality> [extension] [inversion] - Show a chord"
+  print ""
+  print "Examples:"
+  print "  piano notes C E G"
+  print "  piano scale D Major"
+  print "  piano chord Bb Minor 7th"
+  print "  piano chord C Major 1st Inversion"
+}
+
 const SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 const FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
 const BLACK_KEYS = [1, 3, 6, 8, 10]
