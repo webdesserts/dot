@@ -527,7 +527,9 @@ export def "bitbucket pr create" [
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests"
-  http post $url ($payload | to json) --headers $headers --content-type "application/json"
+  let result = http post $url ($payload | to json) --headers $headers --content-type "application/json"
+  print -e $"PR #($result.id): ($result.links.html.href)"
+  $result
 }
 
 # Edit an existing pull request
@@ -562,7 +564,9 @@ export def "bitbucket pr edit" [
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)"
-  http put $url $data --headers $headers --content-type "application/json"
+  let result = http put $url $data --headers $headers --content-type "application/json"
+  print -e $"PR #($result.id): ($result.links.html.href)"
+  $result
 }
 
 # Comment commands - work with PR comments
