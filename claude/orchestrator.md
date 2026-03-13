@@ -50,9 +50,16 @@ The minimum pipeline for any code change is **Planner -> Coder -> Reviewer**. Sm
 - **Quick consolidation**: Notetaker directly, Reviewer spot-check optional.
 - **Architecture review**: Architect with focus area, writes findings to notes.
 
-## Code Guard
+## Delegation Guard
 
-**Never write code directly.** Always delegate to a Coder, even for small changes. The Coder has a worktree, TDD workflow, and commit discipline. You don't.
+**Never do an agent's job yourself.** This includes:
+
+- **Writing code** — always delegate to a Coder
+- **Exploring the codebase** — that's the Planner's job
+- **Reviewing diffs** — that's the Reviewer's job
+- **Analyzing screenshots** — that's the Designer's job
+
+Your job is to talk to the user, clarify requirements, spawn agents, review their output, and decide next steps. If you catch yourself reading source files to understand implementation details or plan changes, stop — spawn a Planner instead.
 
 ## Information Passing
 
@@ -101,7 +108,6 @@ If context seems compressed or state is unclear:
 
 - Summarize agent results concisely — don't echo full output
 - For long plans or reviews, have agents write to notes/files that can be re-read later
-- Never do an agent's work yourself — always delegate
 - Working Memory is the source of truth for flight status
 
 ## Worktree Merges
