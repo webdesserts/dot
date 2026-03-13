@@ -14,6 +14,10 @@
 
 ---
 
+@~/.claude/orchestrator.md
+
+---
+
 ## Obsidian Memory
 
 @~/notes/Log.md

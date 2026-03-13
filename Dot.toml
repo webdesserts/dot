@@ -25,5 +25,7 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.claude/CLAUDE.md" = "claude/CLAUDE.md"
 "~/.claude/settings.json" = "claude/settings.json"
 "~/.claude/skills" = "claude/skills"
+"~/.claude/agents" = "claude/agents"
+"~/.claude/orchestrator.md" = "claude/orchestrator.md"
 "~/.config/opencode/AGENTS.md" = "opencode/AGENTS.md"
 "/etc/sysctl.conf" = "sysctl.conf"
