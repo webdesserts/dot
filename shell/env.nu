@@ -25,32 +25,6 @@ $env.NU_LIB_DIRS = [($env.HOME | path join 'scripts')]
 # Directories to search for plugin binaries when calling register
 $env.NU_PLUGIN_DIRS = [($env.HOME | path join 'plugins')]
 
-# === 1Password Service Account ===
-# Uses a service account for non-interactive access to secrets and SSH keys.
-# On first run, prompts to paste the service account token and saves it locally.
-
-if not (which op | is-empty) {
-
-let op_version = (op --version | split row '.' | first 2 | each { into int })
-if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
-  print -e "warning: 1Password CLI >= 2.34 required for service account features"
-  print -e "  Install: brew install --cask 1password-cli@beta"
-}
-
-const op_token_file = "~/.config/op/service-account-token" | path expand
-if not ($op_token_file | path exists) {
-  print "1Password service account token not found."
-  let token = (input -s "Paste your service account token (or press Enter to skip): " | str trim)
-  if ($token | is-not-empty) {
-    mkdir ($op_token_file | path dirname)
-    $token | save --raw $op_token_file
-    chmod 600 $op_token_file
-    $env.OP_SERVICE_ACCOUNT_TOKEN = $token
-  }
-} else {
-  $env.OP_SERVICE_ACCOUNT_TOKEN = (open --raw $op_token_file | str trim)
-}
-
 # --- SSH Agent ---
 # Use the system ssh-agent instead of 1Password's desktop agent socket.
 # macOS launchd provides one automatically. On Linux, start one if needed.
@@ -62,51 +36,87 @@ if ($env.SSH_AUTH_SOCK? | default "" | is-empty) {
   $env.SSH_AGENT_PID = $pid
 }
 
-# Load SSH keys from the Develop vault — only keys not already in the agent
-if ($env.OP_SERVICE_ACCOUNT_TOKEN? != null) {
-  print -n "Connecting to 1Password..."
-  try {
-    let loaded = (do { ssh-add -l } | complete)
-    let loaded_fps = if $loaded.exit_code == 0 {
-      $loaded.stdout | lines | each { split row " " | get 1 }
-    } else { [] }
+# === 1Password Service Account ===
+# Uses a service account for non-interactive access to secrets and SSH keys.
+# On first run, prompts to paste the service account token and saves it locally.
 
-    let vault_keys = (op item list --categories "SSH Key" --format json | from json)
-    let missing = ($vault_keys | where { |key| $key.additional_information not-in $loaded_fps })
+if not (which op | is-empty) {
 
-    if not ($missing | is-empty) {
-      print -n $"\r(ansi erase_entire_line)Adding SSH keys..."
-      let private_keys = ($missing | par-each { |key|
-        try {
-          op read $"op://Develop/($key.id)/private key?ssh-format=openssh" --no-newline
-        } catch {
-          print -e $"warning: failed to read SSH key '($key.title)'"
-          null
-        }
-      } | where { $in != null })
-      $private_keys | each { |pk| $pk | ssh-add - o+e>| ignore }
+let op_version = (op --version | split row '.' | first 2 | each { into int })
+if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
+  print -e "warning: 1Password CLI >= 2.34 required for service account features"
+  print -e "  Install: brew install --cask 1password-cli@beta"
+} else {
+
+  const op_token_file = "~/.config/op/service-account-token" | path expand
+  if not ($op_token_file | path exists) {
+    print -n "1Password service account token not found."
+    let prompt = "\r" + (ansi erase_entire_line) + "Paste your service account token (or press Enter to skip): "
+    let token = (input -s $prompt | str trim)
+    if ($token | is-not-empty) {
+      $env.OP_SERVICE_ACCOUNT_TOKEN = $token
+      print -n $"\r(ansi erase_entire_line)Validating token..."
+      let check = (do { op whoami } | complete)
+      if $check.exit_code == 0 {
+        mkdir ($op_token_file | path dirname)
+        $token | save --raw $op_token_file
+        chmod 600 $op_token_file
+      } else {
+        print -e $"\r(ansi erase_entire_line)warning: token validation failed, not saving"
+        $env.OP_SERVICE_ACCOUNT_TOKEN = null
+      }
     }
-  } catch {
-    print -e "warning: failed to list SSH keys from 1Password"
+    print -n $"\r(ansi erase_entire_line)"
+  } else {
+    $env.OP_SERVICE_ACCOUNT_TOKEN = (open --raw $op_token_file | str trim)
   }
 
-  # --- Secrets ---
-  # Read environment variables directly from a 1Password Environment (CLI >= 2.34)
-  print -n $"\r(ansi erase_entire_line)Loading secrets..."
-  const op_env_id = "eqonplojx5fxpgnmxfmyqotboi"
-  try {
-    op environment read $op_env_id
-      | lines
-      | where { |line| not ($line | str starts-with '#') and ($line | str contains '=') }
-      | parse "{key}={value}"
-      | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
-      | load-env
-  } catch {
-    print -e "warning: failed to load secrets from 1Password"
-  }
-  print -n $"\r(ansi erase_entire_line)"
-}
+  # Load SSH keys from the Develop vault — only keys not already in the agent
+  if ($env.OP_SERVICE_ACCOUNT_TOKEN? != null) {
+    print -n "Connecting to 1Password..."
+    try {
+      let loaded = (do { ssh-add -l } | complete)
+      let loaded_fps = if $loaded.exit_code == 0 {
+        $loaded.stdout | lines | each { split row " " | get 1 }
+      } else { [] }
 
+      let vault_keys = (op item list --categories "SSH Key" --format json | from json)
+      let missing = ($vault_keys | where { |key| $key.additional_information not-in $loaded_fps })
+
+      if not ($missing | is-empty) {
+        print -n $"\r(ansi erase_entire_line)Adding SSH keys..."
+        let private_keys = ($missing | par-each { |key|
+          try {
+            op read $"op://Develop/($key.id)/private key?ssh-format=openssh" --no-newline
+          } catch {
+            print -e $"warning: failed to read SSH key '($key.title)'"
+            null
+          }
+        } | where { $in != null })
+        $private_keys | each { |pk| $pk | ssh-add - o+e>| ignore }
+      }
+    } catch {
+      print -e "warning: failed to list SSH keys from 1Password"
+    }
+
+    # --- Secrets ---
+    # Read environment variables directly from a 1Password Environment (CLI >= 2.34)
+    print -n $"\r(ansi erase_entire_line)Loading secrets..."
+    const op_env_id = "eqonplojx5fxpgnmxfmyqotboi"
+    try {
+      op environment read $op_env_id
+        | lines
+        | where { |line| not ($line | str starts-with '#') and ($line | str contains '=') }
+        | parse "{key}={value}"
+        | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
+        | load-env
+    } catch {
+      print -e "warning: failed to load secrets from 1Password"
+    }
+    print -n $"\r(ansi erase_entire_line)"
+  }
+
+} # end: version check
 } # end: 1Password
 
 const work_env_file = "~/scripts/work-env.nu"
