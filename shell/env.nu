@@ -87,13 +87,22 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
         print -n $"\r(ansi erase_entire_line)Adding SSH keys..."
         let private_keys = ($missing | par-each { |key|
           try {
-            op read $"op://Develop/($key.id)/private key?ssh-format=openssh" --no-newline
+            { title: $key.title, pem: (op read $"op://Develop/($key.id)/private key?ssh-format=openssh") }
           } catch {
             print -e $"warning: failed to read SSH key '($key.title)'"
             null
           }
         } | where { $in != null })
-        $private_keys | each { |pk| $pk | ssh-add - o+e>| ignore }
+        let errors = ($private_keys | each { |pk|
+          let result = ($"($pk.pem)\n" | ssh-add - | complete)
+          if $result.exit_code != 0 {
+            $"warning: failed to add SSH key '($pk.title)': ($result.stderr | str trim)"
+          }
+        } | where { $in != null })
+        if not ($errors | is-empty) {
+          print -e $"\r(ansi erase_entire_line)(ansi { bg: red, attr: b }) Error (ansi reset) Failed to add SSH keys"
+          $errors | each { |e| print -e $e }
+        }
       }
     } catch {
       print -e "warning: failed to list SSH keys from 1Password"
