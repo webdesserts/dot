@@ -50,12 +50,12 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
 
   const op_token_file = "~/.config/op/service-account-token" | path expand
   if not ($op_token_file | path exists) {
-    print -n "1Password service account token not found."
+    print -ne "1Password service account token not found."
     let prompt = "\r" + (ansi erase_entire_line) + "Paste your service account token (or press Enter to skip): "
     let token = (input -s $prompt | str trim)
     if ($token | is-not-empty) {
       $env.OP_SERVICE_ACCOUNT_TOKEN = $token
-      print -n $"\r(ansi erase_entire_line)Validating token..."
+      print -ne $"\r(ansi erase_entire_line)Validating token..."
       let check = (do { op whoami } | complete)
       if $check.exit_code == 0 {
         mkdir ($op_token_file | path dirname)
@@ -66,14 +66,14 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
         $env.OP_SERVICE_ACCOUNT_TOKEN = null
       }
     }
-    print -n $"\r(ansi erase_entire_line)"
+    print -ne $"\r(ansi erase_entire_line)"
   } else {
     $env.OP_SERVICE_ACCOUNT_TOKEN = (open --raw $op_token_file | str trim)
   }
 
   # Load SSH keys from the Develop vault — only keys not already in the agent
   if ($env.OP_SERVICE_ACCOUNT_TOKEN? != null) {
-    print -n "Connecting to 1Password..."
+    print -ne "Connecting to 1Password..."
     try {
       let loaded = (do { ssh-add -l } | complete)
       let loaded_fps = if $loaded.exit_code == 0 {
@@ -84,7 +84,7 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
       let missing = ($vault_keys | where { |key| $key.additional_information not-in $loaded_fps })
 
       if not ($missing | is-empty) {
-        print -n $"\r(ansi erase_entire_line)Adding SSH keys..."
+        print -ne $"\r(ansi erase_entire_line)Adding SSH keys..."
         let private_keys = ($missing | par-each { |key|
           try {
             { title: $key.title, pem: (op read $"op://Develop/($key.id)/private key?ssh-format=openssh") }
@@ -110,7 +110,7 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
 
     # --- Secrets ---
     # Read environment variables directly from a 1Password Environment (CLI >= 2.34)
-    print -n $"\r(ansi erase_entire_line)Loading secrets..."
+    print -ne $"\r(ansi erase_entire_line)Loading secrets..."
     const op_env_id = "eqonplojx5fxpgnmxfmyqotboi"
     try {
       op environment read $op_env_id
@@ -122,7 +122,7 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
     } catch {
       print -e "warning: failed to load secrets from 1Password"
     }
-    print -n $"\r(ansi erase_entire_line)"
+    print -ne $"\r(ansi erase_entire_line)"
   }
 
 } # end: version check
