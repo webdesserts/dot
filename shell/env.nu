@@ -36,6 +36,23 @@ if ($env.SSH_AUTH_SOCK? | default "" | is-empty) {
   $env.SSH_AGENT_PID = $pid
 }
 
+# Verify the agent is actually reachable. If SSH_AUTH_SOCK was inherited
+# from the outer environment but points at a dead socket, fail loudly
+# rather than silently routing ssh-add calls to a socket that will
+# reject them.
+let ssh_agent_ok = ((do { ssh-add -l } | complete).exit_code != 2)
+if not $ssh_agent_ok {
+  print -e $"(ansi { bg: red, attr: b }) Error (ansi reset) SSH agent unreachable"
+  print -e $"  SSH_AUTH_SOCK=($env.SSH_AUTH_SOCK) is set but the socket is not responding."
+  print -e "  Possible causes:"
+  print -e "    - A stale socket path inherited from a previous session"
+  print -e "    - An agent installed by another tool (1Password, Secretive, keychain, etc.)"
+  print -e "    - A dead ssh-agent process"
+  print -e ""
+  print -e "  To recover this shell only:"
+  print -e "    hide-env SSH_AUTH_SOCK; exec nu"
+}
+
 # === 1Password Service Account ===
 # Uses a service account for non-interactive access to secrets and SSH keys.
 # On first run, prompts to paste the service account token and saves it locally.
@@ -73,54 +90,65 @@ if ($op_version.0 < 2) or ($op_version.0 == 2 and $op_version.1 < 34) {
 
   # Load SSH keys from the Develop vault — only keys not already in the agent
   if ($env.OP_SERVICE_ACCOUNT_TOKEN? != null) {
-    print -ne "Connecting to 1Password..."
-    try {
-      let loaded = (do { ssh-add -l } | complete)
-      let loaded_fps = if $loaded.exit_code == 0 {
-        $loaded.stdout | lines | each { split row " " | get 1 }
-      } else { [] }
+    if $ssh_agent_ok {
+      print -ne "Connecting to 1Password..."
+      try {
+        let loaded = (do { ssh-add -l } | complete)
+        let loaded_fps = if $loaded.exit_code == 0 {
+          $loaded.stdout | lines | each { split row " " | get 1 }
+        } else { [] }
 
-      let vault_keys = (op item list --categories "SSH Key" --format json | from json)
-      let missing = ($vault_keys | where { |key| $key.additional_information not-in $loaded_fps })
+        let vault_keys = (op item list --categories "SSH Key" --format json | from json)
+        let missing = ($vault_keys | where { |key| $key.additional_information not-in $loaded_fps })
 
-      if not ($missing | is-empty) {
-        print -ne $"\r(ansi erase_entire_line)Adding SSH keys..."
-        let private_keys = ($missing | par-each { |key|
-          try {
-            { title: $key.title, pem: (op read $"op://Develop/($key.id)/private key?ssh-format=openssh") }
-          } catch {
-            print -e $"warning: failed to read SSH key '($key.title)'"
-            null
+        if not ($missing | is-empty) {
+          print -ne $"\r(ansi erase_entire_line)Adding SSH keys..."
+          let private_keys = ($missing | par-each { |key|
+            try {
+              { title: $key.title, pem: (op read $"op://Develop/($key.id)/private key?ssh-format=openssh") }
+            } catch {
+              print -e $"warning: failed to read SSH key '($key.title)'"
+              null
+            }
+          } | where { $in != null })
+          let errors = ($private_keys | each { |pk|
+            let result = ($"($pk.pem)\n" | ssh-add - | complete)
+            if $result.exit_code != 0 {
+              $"warning: failed to add SSH key '($pk.title)': ($result.stderr | str trim)"
+            }
+          } | where { $in != null })
+          if not ($errors | is-empty) {
+            print -e $"\r(ansi erase_entire_line)(ansi { bg: red, attr: b }) Error (ansi reset) Failed to add SSH keys"
+            $errors | each { |e| print -e $e }
           }
-        } | where { $in != null })
-        let errors = ($private_keys | each { |pk|
-          let result = ($"($pk.pem)\n" | ssh-add - | complete)
-          if $result.exit_code != 0 {
-            $"warning: failed to add SSH key '($pk.title)': ($result.stderr | str trim)"
-          }
-        } | where { $in != null })
-        if not ($errors | is-empty) {
-          print -e $"\r(ansi erase_entire_line)(ansi { bg: red, attr: b }) Error (ansi reset) Failed to add SSH keys"
-          $errors | each { |e| print -e $e }
         }
+      } catch {
+        print -e "warning: failed to list SSH keys from 1Password"
       }
-    } catch {
-      print -e "warning: failed to list SSH keys from 1Password"
     }
 
     # --- Secrets ---
     # Read environment variables directly from a 1Password Environment (CLI >= 2.34)
     print -ne $"\r(ansi erase_entire_line)Loading secrets..."
     const op_env_id = "eqonplojx5fxpgnmxfmyqotboi"
-    try {
-      op environment read $op_env_id
-        | lines
-        | where { |line| not ($line | str starts-with '#') and ($line | str contains '=') }
-        | parse "{key}={value}"
-        | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
-        | load-env
-    } catch {
-      print -e "warning: failed to load secrets from 1Password"
+    let op_result = (do { op environment read $op_env_id } | complete)
+    if $op_result.exit_code != 0 {
+      print -e $"\r(ansi erase_entire_line)warning: failed to load secrets from 1Password \(exit ($op_result.exit_code)\)"
+      let detail = ($op_result.stderr | str trim)
+      if ($detail | is-not-empty) {
+        $detail | lines | each { |l| print -e $"  ($l)" }
+      }
+    } else {
+      try {
+        $op_result.stdout
+          | lines
+          | where { |line| not ($line | str starts-with '#') and ($line | str contains '=') }
+          | parse "{key}={value}"
+          | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
+          | load-env
+      } catch { |err|
+        print -e $"\r(ansi erase_entire_line)warning: failed to parse secrets from 1Password: ($err.msg)"
+      }
     }
     print -ne $"\r(ansi erase_entire_line)"
   }
