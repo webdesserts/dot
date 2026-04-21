@@ -73,7 +73,7 @@
 
 **Commit messages**: Short subject line describing what changed. Optional brief description for bugs or important context. No attribution lines.
 
-**Git safety**: Never push without permission. Never force push to main/master. Never skip hooks. Never amend other developers' commits.
+**Git safety**: Never push without permission. Never force push to main. Never skip hooks. Never amend other developers' commits.
 
 ## Implementation Approach - CRITICAL
 
