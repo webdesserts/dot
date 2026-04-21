@@ -1,0 +1,19 @@
+#!/bin/bash
+# Login-shell wrapper for nushell.
+#
+# Why this exists: nushell doesn't source env.nu when invoked as `nu -c "cmd"`,
+# which is how sshd runs remote commands. That means PATH additions, env vars,
+# and 1Password-loaded secrets are all missing from non-interactive SSH sessions.
+#
+# This wrapper forces `nu -l` (login mode), which always sources env.nu and
+# config.nu — the same behavior interactive sessions get. It passes through
+# all arguments, so:
+#   - `nu-login`           (interactive)    → `nu -l`       (REPL with env loaded)
+#   - `nu-login -c "cmd"`  (non-interactive) → `nu -l -c "cmd"` (env loaded + cmd runs)
+#
+# Install nir's login shell to point at this script instead of nu directly,
+# and SSH remote commands will behave the same as interactive sessions.
+#
+# Reference: https://github.com/nushell/nushell/issues/10219
+
+exec /opt/homebrew/bin/nu -l "$@"

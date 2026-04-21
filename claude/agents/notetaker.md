@@ -1,8 +1,8 @@
 ---
 name: notetaker
 description: "Manages notes and memory. Deep searches, reorganization, consolidation of knowledge base. Understands note taxonomy and proactively consolidates."
-model: opus
-maxTurns: 30
+model: sonnet
+maxTurns: 300
 tools: [Read, Glob, Grep, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note, mcp__obsidian-memory__replace_in_note, mcp__obsidian-memory__move_note, mcp__obsidian-memory__delete_note, mcp__obsidian-memory__write_logs, mcp__obsidian-memory__log, mcp__obsidian-memory__reflect, mcp__obsidian-memory__update_frontmatter, mcp__obsidian-memory__get_weekly_note_info]
 ---
 

@@ -9,6 +9,9 @@ use ~/scripts/prompts.nu
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
 
+# Suppress Claude Code's built-in task tools (we use the agent-task harness instead)
+alias claude = ^claude --disallowedTools "TaskCreate,TaskUpdate,TaskList,TaskGet"
+
 prompts set minimal
 
 # The default config record. This is where much of your global configuration is setup.
@@ -83,4 +86,20 @@ $env.config = {
       }
     }
   ]
+}
+
+
+# ---------------------------------------------------------------------------
+# Zellij session helpers
+# ---------------------------------------------------------------------------
+
+# Attach to a named Zellij session, creating it if it doesn't exist.
+# Usage: `zel agent` → attaches to session "agent" or creates it.
+def zel [name: string] {
+    zellij attach --create $name
+}
+
+# List active Zellij sessions.
+def "zel ls" [] {
+    zellij list-sessions
 }

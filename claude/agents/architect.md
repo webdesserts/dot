@@ -5,7 +5,6 @@ model: opus
 permissionMode: plan
 maxTurns: 40
 tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note]
-skills: [typescript, rust, nushell]
 ---
 
 # Architect — Holistic Reviewer
