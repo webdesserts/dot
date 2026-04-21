@@ -1622,10 +1622,6 @@
 				<key>Red Component</key>
 				<real>0.12694718999999999</real>
 			</dict>
-			<key>Brighten Bold Text (Dark)</key>
-			<false/>
-			<key>Brighten Bold Text (Light)</key>
-			<false/>
 			<key>Character Encoding</key>
 			<integer>4</integer>
 			<key>Close Sessions On End</key>
@@ -1634,10 +1630,6 @@
 			<integer>80</integer>
 			<key>Command</key>
 			<string>login -fp michael</string>
-			<key>Cursor Boost (Dark)</key>
-			<real>0.0</real>
-			<key>Cursor Boost (Light)</key>
-			<real>0.0</real>
 			<key>Cursor Color</key>
 			<dict>
 				<key>Alpha Component</key>
@@ -1769,10 +1761,6 @@
 			<false/>
 			<key>Disable Window Resizing</key>
 			<true/>
-			<key>Faint Text Alpha (Dark)</key>
-			<real>0.5</real>
-			<key>Faint Text Alpha (Light)</key>
-			<real>0.5</real>
 			<key>Flashing Bell</key>
 			<false/>
 			<key>Foreground Color</key>
@@ -2166,7 +2154,7 @@
 				<key>Green Component</key>
 				<real>0.98600882291793823</real>
 				<key>Red Component</key>
-				<real>0.99697154760360718</real>
+				<real>0.99697142839431763</real>
 			</dict>
 			<key>Match Background Color (Dark)</key>
 			<dict>
@@ -2179,7 +2167,7 @@
 				<key>Green Component</key>
 				<real>0.98600882291793823</real>
 				<key>Red Component</key>
-				<real>0.99697154760360718</real>
+				<real>0.99697142839431763</real>
 			</dict>
 			<key>Match Background Color (Light)</key>
 			<dict>
@@ -2192,13 +2180,9 @@
 				<key>Green Component</key>
 				<real>0.98600882291793823</real>
 				<key>Red Component</key>
-				<real>0.99697154760360718</real>
+				<real>0.99697142839431763</real>
 			</dict>
 			<key>Minimum Contrast</key>
-			<real>0.0</real>
-			<key>Minimum Contrast (Dark)</key>
-			<real>0.0</real>
-			<key>Minimum Contrast (Light)</key>
 			<real>0.0</real>
 			<key>Mouse Reporting</key>
 			<true/>
@@ -2332,10 +2316,6 @@
 			<key>Silence Bell</key>
 			<false/>
 			<key>Smart Cursor Color</key>
-			<false/>
-			<key>Smart Cursor Color (Dark)</key>
-			<false/>
-			<key>Smart Cursor Color (Light)</key>
 			<false/>
 			<key>Smart Selection Actions Use Interpolated Strings</key>
 			<false/>
@@ -2485,35 +2465,15 @@
 			<true/>
 			<key>Use Bright Bold</key>
 			<false/>
-			<key>Use Bright Bold (Dark)</key>
-			<false/>
-			<key>Use Bright Bold (Light)</key>
-			<false/>
 			<key>Use Canonical Parser</key>
-			<false/>
-			<key>Use Cursor Guide (Dark)</key>
-			<false/>
-			<key>Use Cursor Guide (Light)</key>
 			<false/>
 			<key>Use Italic Font</key>
 			<true/>
 			<key>Use Non-ASCII Font</key>
 			<false/>
-			<key>Use Selected Text Color (Dark)</key>
-			<true/>
-			<key>Use Selected Text Color (Light)</key>
-			<true/>
 			<key>Use Separate Colors for Light and Dark Mode</key>
 			<true/>
 			<key>Use Tab Color</key>
-			<false/>
-			<key>Use Tab Color (Dark)</key>
-			<false/>
-			<key>Use Tab Color (Light)</key>
-			<false/>
-			<key>Use Underline Color (Dark)</key>
-			<false/>
-			<key>Use Underline Color (Light)</key>
 			<false/>
 			<key>Vertical Spacing</key>
 			<real>1</real>
@@ -2585,6 +2545,8 @@
 	<key>RightOption</key>
 	<integer>3</integer>
 	<key>SavePasteHistory</key>
+	<false/>
+	<key>SeparateStatusBarsPerPane</key>
 	<false/>
 	<key>ShowBookmarkName</key>
 	<false/>
