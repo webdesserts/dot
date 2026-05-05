@@ -26,3 +26,5 @@
 [user]
 	name = Michael Mullins
 	email = michael@webdesserts.com
+[init]
+	defaultBranch = main
