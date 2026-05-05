@@ -80,4 +80,5 @@
 
 **NEVER use Bash** — use nushell for all shell operations!
 **NEVER PUSH** without explicit user permission!
+**NEVER add `Co-Authored-By: Claude` trailers** to commit messages — commits should reflect human authors only.
 **ALWAYS SYNC** before making major architectural decisions or diverging from original approach!
