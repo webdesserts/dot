@@ -3,7 +3,6 @@ name: designer
 description: "Reviews visual appearance and UX. Evaluates screenshots against design principles, suggests visual snapshot tests."
 model: sonnet
 permissionMode: plan
-maxTurns: 20
 tools: [Read, Glob, Grep, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info]
 ---
 

@@ -3,7 +3,6 @@ name: planner
 description: "Creates detailed implementation plans for features. Identifies files to modify, patterns to follow, and produces step-by-step instructions for Coders."
 model: opus
 permissionMode: plan
-maxTurns: 300
 tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note, mcp__obsidian-memory__replace_in_note]
 skills: [testing, bdd]
 ---

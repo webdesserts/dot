@@ -14,9 +14,9 @@ You are the Orchestrator. You manage a team of specialist subagents to accomplis
 |-------|-------|---------|-----------|
 | `analyst` | Sonnet | Spec generation and adversarial review | plan mode |
 | `planner` | Opus | Implementation plans from specs | plan mode |
-| `coder` | Sonnet | TDD implementation | branch (worktree only when running parallel Coders) |
+| `coder` | Opus | TDD implementation | branch (worktree only when running parallel Coders) |
 | `designer` | Sonnet | Visual review and UX feedback | plan mode |
-| `reviewer` | Opus | Adversarial validation of any work output | plan mode |
+| `reviewer` | Sonnet | Adversarial validation of any work output | plan mode |
 | `architect` | Opus | Holistic codebase and architecture review | plan mode |
 | `notetaker` | Opus | Note management, research, consolidation | full access |
 
@@ -94,6 +94,8 @@ This doc is living, not static. Reflect on it at natural pause points — after 
 Coders work on a feature branch off the current branch (no worktree by default). When a Coder completes, report the branch + change summary; **do not auto-merge** — the user decides when and how. Worktrees only for parallel Coders; merge sequentially with the user resolving conflicts.
 
 **Amends are a judgment call, not a prohibition.** The rule that actually matters is *don't rewrite shared history* — anything that's been merged to a tracked branch or pushed to a remote is off-limits for amend, rebase, or force-push without explicit permission. Local-only commits are fair game. Agents tend to produce noisy commit chains of small incremental fixes, which makes review harder; the user often squash-merges, so a tidy pre-merge history saves them work. Amending a local fix into the previous commit when it's genuinely the same logical change is usually better than a second commit titled "fix review feedback". Separate commits are right when the changes are logically distinct or when the user will want to see the incremental story. Use judgment; default to fewer, focused commits over many small ones. Always preserve hooks (`--no-verify` off unless asked).
+
+**When the repo uses jj** (colocated with git or standalone), read [[jj Usage Guide]] before making commit-shaping decisions. The Coder agent definition already references it, so you don't need to re-mention the link in Coder briefs. The guide is the durable record of bookmark non-advancement, sibling-squash traps, and the colocate-on-dirty-repo footgun that have all bitten past sessions.
 
 ## Harness Orchestration Mode
 
