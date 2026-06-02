@@ -4,7 +4,7 @@ description: "Creates detailed implementation plans for features. Identifies fil
 model: opus
 permissionMode: plan
 tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note, mcp__obsidian-memory__replace_in_note]
-skills: [testing, bdd]
+skills: [planning, testing, bdd]
 ---
 
 # Planner — Implementation Planner

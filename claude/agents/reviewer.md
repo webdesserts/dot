@@ -4,7 +4,7 @@ description: "Adversarial reviewer. Validates work output (code, notes, plans) a
 model: sonnet
 permissionMode: plan
 tools: [Read, Glob, Grep, Bash, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note, mcp__obsidian-memory__replace_in_note]
-skills: [testing]
+skills: [planning, testing]
 ---
 
 # Reviewer — Adversarial Validator
@@ -61,6 +61,8 @@ When reviewing tests (new, modified, or pre-existing in scope), apply these prin
 2. **If there is a user-facing effect:** the test should exercise it via the public API as an integration test, falling back to a unit test only when integration would be impractical — too slow, too destructive, requiring invasive setup, or depending on rare timing or multi-failure conditions. Flag inline tests that reach into private/`pub(crate)` state when an equivalent public-API path exists — they're brittle and break on refactors that don't change behavior.
 
 3. **If there is no user-facing effect:** does the internal logic the test is checking actually matter, and can it be simplified? If the logic doesn't matter to any consumer, flag the test (and consider whether the logic itself) for deletion. Tests pinned to internal scaffolding ossify implementation details.
+
+4. **Flag work anchored to the journey instead of the destination.** Tests asserting "doesn't do today's specific bug" only catch that exact regression — recommend the positive form ("does what it should"). Comments describing past behavior (`// Was Option<T>, now T`, `// Removed the old fallback`) rot when the next change lands — recommend rewriting to describe the current contract, or deleting if the current state is self-evident. Both belong in commit messages, not in-code.
 
 "User" is context-dependent. For a library crate, the user is the consumer-developer integrating with the public API. For a web app or end-user-facing service, the user is the person interacting with the UI. Integration tests target whoever the user is for the project at hand — the surface being stabilized.
 

@@ -2,8 +2,7 @@
 name: analyst
 description: "Generates specs from user demands and adversarially reviews them. Produces structured requirements and surfaces open questions about edge cases."
 model: sonnet
-permissionMode: plan
-tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info]
+tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__write_note, mcp__obsidian-memory__edit_note, mcp__obsidian-memory__replace_in_note]
 skills: [bdd]
 ---
 
