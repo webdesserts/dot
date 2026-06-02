@@ -78,7 +78,7 @@
 
 ## Remember
 
-**NEVER use Bash** — use nushell for all shell operations!
+**NEVER use Bash** for ad-hoc shell operations — use nushell instead. *Exception:* the scheduling/monitoring tools (`Monitor`, and `Bash` with `run_in_background` for one-shot "wait until X" conditions) are built around bash-style commands and are fine to use as designed — this rule targets interactive/ad-hoc shell work, not these background watchers.
 **NEVER PUSH** without explicit user permission!
 **NEVER add `Co-Authored-By: Claude` trailers** to commit messages — commits should reflect human authors only.
 **ALWAYS SYNC** before making major architectural decisions or diverging from original approach!
