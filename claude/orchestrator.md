@@ -123,7 +123,7 @@ When dogfooding the agent-task harness — dispatching `task create` jobs and wa
 **Stopping a runaway harness.** When a task is misbehaving and you need to halt it:
 1. **First try `task <id> stop`.** Clean halt — preserves the task as resumable, leaves the agent feed intact for diagnosis, and is the right move 99% of the time.
 2. **If stop doesn't work** (daemon wedged, ghost-running state, etc.): fall back to `pkill -x taskd` to kill the daemon. The task survives in the DB and can be resumed once the daemon comes back up.
-3. **Avoid `task <id> abort` for runaway recovery.** Abort has the same blast radius as stop but additionally makes the task unrecoverable — you lose the ability to resume from where it was. Only use abort when you actually want the task gone permanently (e.g. you've decided not to pursue this work at all).
+3. **Avoid `task <id> abort` for runaway recovery.** Abort has the same blast radius as stop but additionally makes the task unrecoverable — you lose the ability to resume from where it was. Only use abort when you actually want the task gone permanently (e.g. you've decided not to pursue this work at all). **Always get the user's explicit permission before aborting a task — it is irreversible, and a vague instruction like "clean it up" is NOT authorization to abort.** Clean the branch / bookmark / workspace freely; confirm before the abort itself.
 
 **Don't trust silence.** A monitor timing out means no matching events fired — not that the task is healthy. A quiet harness might be grinding, looping, or deadlocked, and event-driven monitors can't tell the difference. Periodic check-ins with `task <id> status` + `task <id> log` catch this; they're much cheaper than discovering a hang an hour later.
 
