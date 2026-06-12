@@ -1,9 +1,17 @@
 # Claude Code Reference
 
+## Device Context
+
+@~/Device.md
+
+Every device keeps a `~/Device.md` — tool-agnostic ground truth for that machine, the
+fleet (umbra · charon · rhea), and the cross-machine agent-coordination conventions. It
+replaced the old per-machine `~/CLAUDE.md`.
+
 ## Key Paths
 
-- **`~/CLAUDE.md`** - Machine-specific context (computer name, network, etc.)
-- **`~/.claude/CLAUDE.md`** - Personal global instructions (this file)
+- **`~/Device.md`** - This device + fleet ground truth (imported above)
+- **`~/.claude/CLAUDE.md`** - Personal global instructions (this file; symlinked from the dots repo, shared across all devices)
 - **`~/.claude.json`** - MCP server configuration
 - **`~/.claude/settings.json`** - Global permissions
 - **`./.claude/settings.json`** - Project permissions (team-shared)
