@@ -97,7 +97,12 @@ if not (which op | is-empty) {
       } else {
         # ---- FULL SYNC ----
         print -ne "Syncing 1Password..."
-        # KEYS: reconcile the agent to the vault (add missing; flush+reload on rotation)
+        # Set the throttle marker BEFORE any op call. If op hangs once, the marker
+        # is still set, so the next shell throttles instead of every shell hanging.
+        touch $sync_marker
+        # KEYS: reconcile the agent to the vault (add missing; flush+reload on rotation).
+        # op item list FAST-FAILS under rate-limit (no hang), so the try/catch alone
+        # handles it — no timeout wrapper needed here.
         try {
           let vault_keys = (op item list --categories "SSH Key" --format json | from json)
           let vault_fps = ($vault_keys | get additional_information)
@@ -118,8 +123,21 @@ if not (which op | is-empty) {
         } catch {
           print -e "warning: 1Password key sync failed; using cached agent keys"
         }
-        # SECRETS: refresh + cache; fall back to cache on failure (rate-limit/offline)
-        let op_result = (do { op environment read $op_env_id } | complete)
+        # SECRETS: refresh + cache; fall back to cache on failure (rate-limit/offline).
+        # op environment read is the ONLY op call that HANGS (~120s) on a rate-limited
+        # machine instead of fast-failing, which would wedge shell init — so bound it
+        # with a 12s timeout via nushell's native job API (no external dep): run op in
+        # a background job that sends its serialized complete-record back to the main
+        # job, and block on `job recv --timeout 12sec`. If op hangs past 12s, recv
+        # throws → fallback record (exit 124) → the cache fallback below; then kill the
+        # still-hanging job. `job flush` first drops any stale mailbox message left by a
+        # re-sourced env.nu. `job id` must be captured in the PARENT scope — inside the
+        # spawned closure it returns the job's own id, not the parent's.
+        job flush
+        let op_job_parent = (job id)
+        let op_job = (job spawn { (^op environment read $op_env_id | complete | to nuon) | job send $op_job_parent })
+        let op_result = (try { (job recv --timeout 12sec) | from nuon } catch { { stdout: "", stderr: "op timed out", exit_code: 124 } })
+        try { job kill $op_job }
         let secrets_raw = (if $op_result.exit_code == 0 {
           $op_result.stdout | save -f $secrets_cache
           chmod 600 $secrets_cache
@@ -133,7 +151,6 @@ if not (which op | is-empty) {
           | parse "{key}={value}"
           | reduce -f {} { |row, acc| $acc | insert $row.key $row.value }
           | load-env
-        touch $sync_marker
         print -ne $"\r(ansi erase_entire_line)"
       }
     }
