@@ -692,3 +692,271 @@ export def "bitbucket pr decline" [
     http post $url $data --headers $headers --content-type "application/json"
   }
 }
+
+# Confluence CLI - Search and read Confluence content via REST API
+#
+# Confluence shares Jira's Atlassian auth (ATLASSIAN_SITE / ATLASSIAN_EMAIL /
+# ATLASSIAN_TOKEN) - no extra env vars needed.
+#
+# Quick help guide:
+#   confluence                 - Show this usage information
+#   confluence --help          - Show all available commands (nushell help)
+#   help confluence search     - Show detailed help for a specific command
+#
+# Main commands:
+#   confluence search <cql>    - Search content using CQL
+#   confluence page <id>       - Read a page by ID (with body)
+export def confluence [] {
+  print "Confluence CLI - Search and read Confluence content via REST API"
+  print ""
+  print "Usage:"
+  print "  confluence search <cql>    - Search content using CQL"
+  print "  confluence page <id>       - Read a page by ID (with body)"
+  print ""
+  print "Quick help:"
+  print "  confluence --help          - Show all available commands"
+  print "  help confluence search     - Show detailed help for a specific command"
+}
+
+# Best-effort conversion of Confluence storage/view HTML to markdown.
+#
+# The Confluence REST API has no markdown body format, so this does a regex
+# pass over the XHTML: headings, bold/italic, inline code, links, and list
+# items become markdown; remaining tags are stripped and common HTML entities
+# decoded. Tables and structured macros degrade to plain text.
+def confluence-html-to-md []: string -> string {
+  let nl = (char newline)
+  $in
+  | str replace --all --regex '(?is)<(strong|b)>(.*?)</(strong|b)>' '**${2}**'
+  | str replace --all --regex '(?is)<(em|i)>(.*?)</(em|i)>' '*${2}*'
+  | str replace --all --regex '(?is)<code>(.*?)</code>' '`${1}`'
+  | str replace --all --regex '(?is)<a [^>]*href="([^"]*)"[^>]*>(.*?)</a>' '[${2}](${1})'
+  | str replace --all --regex '(?is)<h1[^>]*>(.*?)</h1>' $"($nl)# ${1}($nl)"
+  | str replace --all --regex '(?is)<h2[^>]*>(.*?)</h2>' $"($nl)## ${1}($nl)"
+  | str replace --all --regex '(?is)<h3[^>]*>(.*?)</h3>' $"($nl)### ${1}($nl)"
+  | str replace --all --regex '(?is)<h4[^>]*>(.*?)</h4>' $"($nl)#### ${1}($nl)"
+  | str replace --all --regex '(?is)<h5[^>]*>(.*?)</h5>' $"($nl)##### ${1}($nl)"
+  | str replace --all --regex '(?is)<h6[^>]*>(.*?)</h6>' $"($nl)###### ${1}($nl)"
+  | str replace --all --regex '(?is)<li[^>]*>(.*?)</li>' $"- ${1}($nl)"
+  | str replace --all --regex '(?i)<hr\s*/?>' $"($nl)---($nl)"
+  | str replace --all --regex '(?i)<br\s*/?>' $nl
+  | str replace --all --regex '(?i)</p>' $"($nl)($nl)"
+  | str replace --all --regex '<[^>]+>' ''
+  | str replace --all '&nbsp;' ' '
+  | str replace --all '&amp;' '&'
+  | str replace --all '&lt;' '<'
+  | str replace --all '&gt;' '>'
+  | str replace --all '&quot;' '"'
+  | str replace --all '&#39;' "'"
+  | str replace --all --regex '[^\S\n]+' ' '
+  | str replace --all --regex '\n{3,}' $"($nl)($nl)"
+  | str trim
+}
+
+# --- ADF (Atlas Document Format) -> markdown ----------------------------------
+# Confluence's atlas_doc_format body is structured JSON, so it converts to
+# markdown far more faithfully than the storage XHTML - notably real markdown
+# tables. These are private recursive helpers used by 'confluence page --format adf'.
+
+# Apply ADF inline marks (strong/em/code/strike/link) to a text run.
+def confluence-adf-marks [text: string, marks: list]: nothing -> string {
+  mut out = $text
+  for m in $marks {
+    $out = (match ($m.type? | default "") {
+      "strong" => $"**($out)**"
+      "em" => $"*($out)*"
+      "code" => $"`($out)`"
+      "strike" => $"~~($out)~~"
+      "link" => ("[" + $out + "](" + ($m.attrs?.href? | default "") + ")")
+      _ => $out
+    })
+  }
+  $out
+}
+
+# Render a list of ADF inline nodes (text, hardBreak, mention, ...) to a string.
+def confluence-adf-inline [nodes: list]: nothing -> string {
+  if ($nodes | is-empty) { return "" }
+  $nodes | each {|n|
+    match ($n.type? | default "") {
+      "text" => (confluence-adf-marks ($n.text? | default "") ($n.marks? | default []))
+      "hardBreak" => (char newline)
+      "emoji" => ($n.attrs?.text? | default ($n.attrs?.shortName? | default ""))
+      "mention" => ($n.attrs?.text? | default "")
+      "status" => ($n.attrs?.text? | default "")
+      "date" => ($n.attrs?.timestamp? | default "")
+      "inlineCard" => ($n.attrs?.url? | default "")
+      _ => (confluence-adf-inline ($n.content? | default []))
+    }
+  } | str join ""
+}
+
+# Render an ADF table node as a markdown table (first row treated as header).
+def confluence-adf-table [n: record]: nothing -> string {
+  let nl = (char newline)
+  let rows = ($n.content? | default [])
+  if ($rows | is-empty) { return "" }
+  # Each cell's blocks are flattened to one line (markdown cells can't wrap) and
+  # any literal pipes escaped so they don't break the column structure.
+  let matrix = ($rows | each {|row|
+    ($row.content? | default []) | each {|cell|
+      (confluence-adf-blocks ($cell.content? | default [])) | str replace --all --regex '\s*\n+\s*' ' ' | str replace --all '|' '\|' | str trim
+    }
+  })
+  let ncols = ($matrix | each {|r| $r | length } | math max)
+  let padded = ($matrix | each {|r|
+    let missing = ($ncols - ($r | length))
+    if $missing > 0 { $r | append (1..$missing | each { "" }) } else { $r }
+  })
+  let to_line = {|cells| "| " + ($cells | str join " | ") + " |" }
+  let header = (do $to_line ($padded | first))
+  let sep = (do $to_line (1..$ncols | each { "---" }))
+  let body = ($padded | skip 1 | each {|r| do $to_line $r })
+  ([$header $sep] | append $body) | str join $nl
+}
+
+# Render an ADF bullet/ordered list, indenting continuation lines.
+def confluence-adf-list [n: record, ordered: bool]: nothing -> string {
+  let nl = (char newline)
+  ($n.content? | default []) | enumerate | each {|it|
+    let marker = (if $ordered { $"($it.index + 1). " } else { "- " })
+    let lines = ((confluence-adf-blocks ($it.item.content? | default [])) | lines)
+    if ($lines | is-empty) { $marker } else {
+      ([$"($marker)($lines | first)"] | append ($lines | skip 1 | each {|l| $"  ($l)" })) | str join $nl
+    }
+  } | str join $nl
+}
+
+# Render a single ADF block node to markdown (recurses into children).
+def confluence-adf-block [n: record]: nothing -> string {
+  let nl = (char newline)
+  match ($n.type? | default "") {
+    "paragraph" => (confluence-adf-inline ($n.content? | default []))
+    "heading" => {
+      let level = ($n.attrs?.level? | default 1)
+      let hashes = ("######" | str substring 0..<$level)
+      $"($hashes) (confluence-adf-inline ($n.content? | default []))"
+    }
+    "bulletList" => (confluence-adf-list $n false)
+    "orderedList" => (confluence-adf-list $n true)
+    "taskList" => {
+      ($n.content? | default []) | each {|t|
+        let box = (if ($t.attrs?.state? == "DONE") { "- [x] " } else { "- [ ] " })
+        $"($box)(confluence-adf-inline ($t.content? | default []))"
+      } | str join $nl
+    }
+    "codeBlock" => {
+      let lang = ($n.attrs?.language? | default "")
+      let code = ($n.content? | default [] | each {|c| $c.text? | default "" } | str join "")
+      $"```($lang)($nl)($code)($nl)```"
+    }
+    "blockquote" => ((confluence-adf-blocks ($n.content? | default [])) | lines | each {|l| $"> ($l)" } | str join $nl)
+    "rule" => "---"
+    "table" => (confluence-adf-table $n)
+    "mediaSingle" => ""
+    "mediaGroup" => ""
+    "media" => ""
+    _ => (confluence-adf-blocks ($n.content? | default []))
+  }
+}
+
+# Render a list of ADF block nodes, separating blocks with a blank line.
+def confluence-adf-blocks [nodes: list]: nothing -> string {
+  let nl = (char newline)
+  if ($nodes | is-empty) { return "" }
+  $nodes | each {|n| confluence-adf-block $n } | where {|x| ($x | str trim) != "" } | str join $"($nl)($nl)"
+}
+
+# Search Confluence content using CQL (Confluence Query Language)
+#
+# CQL is Confluence's query language (the analogue of JQL for Jira). Returns a
+# cleaned table of matches (id, type, title, url, excerpt). Pipe an id into
+# 'confluence page' to read the full content. Uses the v1 search endpoint
+# (/wiki/rest/api/search) - there is no v2 CQL search.
+#
+# Example:
+#   confluence search 'text ~ "spatialkey"'
+#   confluence search 'title ~ "release" and type = page'
+#   confluence search 'space = SK and text ~ "report server"' --limit 10
+#   confluence search 'text ~ "auth"' | get 0.id | confluence page $in
+export def "confluence search" [
+  cql: string         # CQL query (e.g. 'text ~ "foo"', 'space = SK and title ~ "bar"')
+  --limit: int = 25   # Max results to return
+]: nothing -> table {
+  # Confluence shares Jira's Atlassian site + API token
+  let config = (get-jira-config)
+  let headers = (get-jira-headers)
+  let encoded_cql = ($cql | url encode)
+  let response = (http get $"https://($config.site)/wiki/rest/api/search?cql=($encoded_cql)&limit=($limit)" --headers $headers)
+
+  $response.results | each {|r|
+    {
+      id: ($r.content?.id? | default null)
+      type: ($r.content?.type? | default ($r.entityType? | default null))
+      title: ($r.content?.title? | default ($r.title? | default null))
+      url: $"https://($config.site)/wiki($r.url? | default '')"
+      excerpt: ($r.excerpt? | default "" | str replace --all --regex '@@@(end)?hl@@@' '')
+    }
+  }
+}
+
+# Read a Confluence page by ID
+#
+# Fetches a page and returns its metadata plus body. Confluence has no markdown
+# body format, so by default the body is converted from ADF (atlas_doc_format,
+# structured JSON) to markdown - this gives the best fidelity, including real
+# markdown tables. --format options:
+#   adf       (default) markdown from ADF JSON (best tables/structure)
+#   markdown            markdown from the storage XHTML (lighter regex pass)
+#   storage             raw XHTML "storage format"
+#   view                raw rendered HTML
+# If a (legacy) page has no ADF body, 'adf' falls back to the storage->markdown pass.
+#
+# Uses the v1 content endpoint, which handles any content type (page, blogpost)
+# and returns the space key. The v2 alternative (pages only) is:
+#   GET /wiki/api/v2/pages/{id}?body-format=atlas_doc_format
+#
+# Example:
+#   confluence page 123456                   # title + markdown body (from ADF)
+#   confluence page 123456 --format storage  # raw XHTML storage format
+#   confluence page 123456 | get body        # just the body
+#   confluence search 'title ~ "runbook"' | get 0.id | confluence page $in
+export def "confluence page" [
+  id: string                # Page/content ID
+  --format: string = "adf"  # Body format: adf (default), markdown, storage, view
+]: nothing -> record {
+  let config = (get-jira-config)
+  let headers = (get-jira-headers)
+
+  let expand = match $format {
+    "view" => "body.view,version,space"
+    "adf" => "body.atlas_doc_format,body.storage,version,space"
+    _ => "body.storage,version,space"
+  }
+  let page = (http get $"https://($config.site)/wiki/rest/api/content/($id)?expand=($expand)" --headers $headers)
+
+  let body = match $format {
+    "markdown" => ($page.body?.storage?.value? | default "" | confluence-html-to-md)
+    "adf" => {
+      let adf_str = ($page.body?.atlas_doc_format?.value? | default "")
+      if ($adf_str | is-empty) {
+        $page.body?.storage?.value? | default "" | confluence-html-to-md
+      } else {
+        confluence-adf-blocks ($adf_str | from json | get content? | default [])
+      }
+    }
+    "view" => ($page.body?.view?.value? | default "")
+    "storage" => ($page.body?.storage?.value? | default "")
+    _ => ($page.body?.storage?.value? | default "")
+  }
+
+  {
+    id: $page.id
+    title: $page.title
+    type: ($page.type? | default null)
+    space: ($page.space?.key? | default null)
+    version: ($page.version?.number? | default null)
+    url: $"https://($config.site)/wiki($page._links?.webui? | default '')"
+    body: $body
+  }
+}
