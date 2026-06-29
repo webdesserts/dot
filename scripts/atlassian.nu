@@ -106,8 +106,8 @@ def get-jira-headers []: nothing -> record {
 # --- markdown -> ADF (Atlassian Document Format) -------------------------------
 # Inverse of confluence-adf-blocks (ADF -> markdown). Lets the jira commands take
 # rich markdown (nested bullets, headings, **bold**/*italic*/`code`, [t](u) links,
-# auto-linked Jira keys like LOR-5418, and an auto-orange leading **Todo:** marker)
-# and write it as ADF for description / Acceptance Criteria fields.
+# auto-linked Jira keys like LOR-5418, and auto-colored leading **Todo:** (orange) /
+# **Note:** (blue) markers) and write it as ADF for description / Acceptance Criteria fields.
 
 # Plain text -> ADF text nodes, auto-linking bare Jira keys (e.g. LOR-5418)
 def jira-linkify [text: string]: nothing -> list {
@@ -162,12 +162,16 @@ def md-inline-nodes [line: string]: nothing -> list {
   $out
 }
 
-# House convention: a leading bold "Todo:" marker is auto-colored orange
-def md-color-todo [nodes: list]: nothing -> list {
+# House convention: a leading bold marker word is auto-colored ("Todo:" orange, "Note:" blue)
+def md-color-markers [nodes: list]: nothing -> list {
   if ($nodes | is-empty) { return $nodes }
+  let markers = [[label color]; ["Todo:" "#ff991f"] ["Note:" "#0747a6"]]
   let f = ($nodes | first)
-  if (($f.text? == "Todo:") and ((($f.marks? | default []) | where {|m| $m.type == "strong"} | length) > 0)) {
-    [($f | upsert marks (($f.marks? | default []) | append {type: "textColor", attrs: {color: "#ff991f"}}))] | append ($nodes | skip 1)
+  let word = ($f.text? | default "")
+  let isStrong = ((($f.marks? | default []) | where {|m| $m.type == "strong"}) | is-not-empty)
+  let hit = ($markers | where label == $word | get 0?)
+  if ($isStrong and ($hit != null)) {
+    [($f | upsert marks (($f.marks? | default []) | append {type: "textColor", attrs: {color: $hit.color}}))] | append ($nodes | skip 1)
   } else { $nodes }
 }
 
@@ -193,7 +197,7 @@ def md-tree [items: list]: nothing -> list {
 
 def md-li [items: list]: nothing -> list {
   $items | each {|it|
-    let para = {type: "paragraph", content: (md-color-todo (md-inline-nodes $it.text))}
+    let para = {type: "paragraph", content: (md-color-markers (md-inline-nodes $it.text))}
     let kids = ($it.children? | default [])
     let content = if ($kids | is-empty) { [$para] } else { [$para, {type: "bulletList", content: (md-li $kids)}] }
     {type: "listItem", content: $content}
@@ -217,9 +221,9 @@ def md-to-adf [md: string]: nothing -> record {
       if (not ($bullets | is-empty)) { $blocks = ($blocks | append {type: "bulletList", content: (md-li (md-tree $bullets))}); $bullets = [] }
       if (not ($hd | is-empty)) {
         let h = ($hd | first)
-        $blocks = ($blocks | append {type: "heading", attrs: {level: ($h.h | str length)}, content: (md-color-todo (md-inline-nodes $h.txt))})
+        $blocks = ($blocks | append {type: "heading", attrs: {level: ($h.h | str length)}, content: (md-color-markers (md-inline-nodes $h.txt))})
       } else {
-        $blocks = ($blocks | append {type: "paragraph", content: (md-color-todo (md-inline-nodes $line))})
+        $blocks = ($blocks | append {type: "paragraph", content: (md-color-markers (md-inline-nodes $line))})
       }
     }
   }
@@ -310,7 +314,8 @@ def md-to-adf [md: string]: nothing -> record {
   #
   # With no markdown arg, prints the current AC rendered as markdown. With a
   # markdown arg, replaces the AC: markdown -> ADF (nested bullets, **bold**,
-  # *italic*, `code`, auto-linked Jira keys, auto-orange leading **Todo:** marker).
+  # *italic*, `code`, auto-linked Jira keys, auto-colored leading **Todo:** (orange) /
+  # **Note:** (blue) markers).
   #
   # Example:
   #   jira issue ac LOR-5420                                      # read as markdown
