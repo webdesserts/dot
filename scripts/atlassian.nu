@@ -57,10 +57,11 @@ export def jira [] {
   print "Jira CLI - Interact with Jira tickets via REST API"
   print ""
   print "Usage:"
-  print "  jira issue ...      - Work with tickets (view, create, update, transition, types)"
+  print "  jira issue ...      - Work with tickets (view, create, link, transition, types)"
   print "  jira comment ...    - Work with comments (add)"
   print "  jira search <jql>   - Search tickets using JQL"
   print "  jira fields         - List field IDs and names"
+  print "  jira linktypes      - List issue link types"
   print ""
   print "Quick help:"
   print "  jira --help              - Show all available commands"
@@ -109,7 +110,8 @@ def get-jira-headers []: nothing -> record {
     print "Usage:"
     print "  jira issue view <ticket>                - View ticket details"
     print "  jira issue update <ticket> <payload>    - Update ticket fields"
-    print "  jira issue create <project> <type> ...  - Create new ticket"
+    print "  jira issue create <project> <type> ...  - Create new ticket (--parent <epic>)"
+    print "  jira issue link <issue> --blocks <key>  - Link issues (--blocks/--blocked-by/--relates/...)"
     print "  jira issue transition <ticket> <status> - Move ticket between statuses"
     print "  jira issue types [--project]            - List available issue types"
     print ""
@@ -148,17 +150,21 @@ def get-jira-headers []: nothing -> record {
 
   # Create a new Jira ticket
   #
-  # Create tickets for bugs, tech debt, or new stories
+  # Create tickets for bugs, tech debt, or new stories. Optionally attach the new
+  # issue to a parent/epic with --parent (works cross-project, e.g. an LOR story
+  # under an RDMP epic).
   #
   # Example:
   #   jira issue create LOR Task "Refactor authentication module"
   #   jira issue create LOR Bug "Login button not working" --description "Users can't log in on mobile"
   #   jira issue create LOR Story "Add dark mode support"
+  #   jira issue create LOR Story "Add stepper" --parent RDMP-2232  # under an epic
   export def "jira issue create" [
     project: string,     # Project key (e.g., "LOR")
     type: string,        # Issue type (e.g., "Story", "Bug", "Task")
     summary: string,     # Ticket summary/title
     --description: string = ""  # Optional description
+    --parent: string = ""       # Optional parent/epic key (e.g., "RDMP-2232"); cross-project OK
   ]: nothing -> record {
     let desc_content = if ($description | is-empty) {
       []
@@ -172,22 +178,68 @@ def get-jira-headers []: nothing -> record {
       }]
     }
 
-    let payload = ({
-      fields: {
-        project: { key: $project },
-        issuetype: { name: $type },
-        summary: $summary,
-        description: {
-          type: "doc",
-          version: 1,
-          content: $desc_content
-        }
+    let base_fields = {
+      project: { key: $project },
+      issuetype: { name: $type },
+      summary: $summary,
+      description: {
+        type: "doc",
+        version: 1,
+        content: $desc_content
       }
-    } | to json)
+    }
+    let fields = if ($parent | is-empty) { $base_fields } else { $base_fields | insert parent { key: $parent } }
+
+    let payload = ({ fields: $fields } | to json)
 
     let config = (get-jira-config)
     let headers = (get-jira-headers)
     http post $"https://($config.site)/rest/api/3/issue" $payload --headers $headers --content-type "application/json"
+  }
+
+  # Link two issues using a directional shortcut for the relationship
+  #
+  # Give the subject issue, then ONE relationship flag pointing at the other
+  # issue. The shortcut flags cover the common cases; --type/--to handles any
+  # link type. Run 'jira linktypes' to see all available types.
+  #
+  # Example:
+  #   jira issue link LOR-5408 --blocks LOR-5411        # 5408 blocks 5411
+  #   jira issue link LOR-5411 --blocked-by LOR-5408    # same link, stated the other way
+  #   jira issue link LOR-1 --relates LOR-2             # 1 relates to 2
+  #   jira issue link LOR-1 --duplicates LOR-2          # 1 duplicates 2
+  #   jira issue link LOR-1 --type "Cloners" --to LOR-2 # any link type
+  export def "jira issue link" [
+    issue: string             # Subject issue key (e.g. LOR-5408)
+    --blocks: string = ""     # Subject BLOCKS this issue
+    --blocked-by: string = "" # Subject IS BLOCKED BY this issue
+    --relates: string = ""    # Subject RELATES TO this issue
+    --duplicates: string = "" # Subject DUPLICATES this issue
+    --type: string = ""       # Generic link type name (use with --to)
+    --to: string = ""         # Generic: the other issue (use with --type)
+  ]: nothing -> any {
+    # Jira reads a link as: outwardIssue <outward-label> inwardIssue
+    let link = (
+      if (not ($blocks | is-empty)) { {name: "Blocks", outward: $issue, inward: $blocks} }
+      else if (not ($blocked_by | is-empty)) { {name: "Blocks", outward: $blocked_by, inward: $issue} }
+      else if (not ($relates | is-empty)) { {name: "Relates", outward: $issue, inward: $relates} }
+      else if (not ($duplicates | is-empty)) { {name: "Duplicate", outward: $issue, inward: $duplicates} }
+      else if ((not ($type | is-empty)) and (not ($to | is-empty))) { {name: $type, outward: $issue, inward: $to} }
+      else { null }
+    )
+
+    if ($link == null) {
+      error make {msg: "Specify a relationship: --blocks / --blocked-by / --relates / --duplicates, or --type <name> --to <key>. See 'jira linktypes'."}
+    }
+
+    let payload = ({
+      type: { name: $link.name },
+      outwardIssue: { key: $link.outward },
+      inwardIssue: { key: $link.inward }
+    } | to json)
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http post $"https://($config.site)/rest/api/3/issueLink" $payload --headers $headers --content-type "application/json"
   }
 
   # Transition a ticket to a new status
@@ -326,6 +378,19 @@ def get-jira-headers []: nothing -> record {
     } else {
       $all_fields | where ($it.name | str downcase | str contains ($filter | str downcase)) | select id name custom
     }
+  }
+
+  # List the available issue link types with their inward/outward labels
+  #
+  # Helpful for finding the right name for 'jira issue link --type'.
+  #
+  # Example:
+  #   jira linktypes
+  #   jira linktypes | where name == Blocks
+  export def "jira linktypes" []: nothing -> table {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    http get $"https://($config.site)/rest/api/3/issueLinkType" --headers $headers | get issueLinkTypes | select name inward outward
   }
 
 # Bitbucket CLI - Interact with Bitbucket pull requests via REST API
