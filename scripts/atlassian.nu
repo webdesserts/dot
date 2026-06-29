@@ -103,6 +103,130 @@ def get-jira-headers []: nothing -> record {
   }
 }
 
+# --- markdown -> ADF (Atlassian Document Format) -------------------------------
+# Inverse of confluence-adf-blocks (ADF -> markdown). Lets the jira commands take
+# rich markdown (nested bullets, headings, **bold**/*italic*/`code`, [t](u) links,
+# auto-linked Jira keys like LOR-5418, and an auto-orange leading **Todo:** marker)
+# and write it as ADF for description / Acceptance Criteria fields.
+
+# Plain text -> ADF text nodes, auto-linking bare Jira keys (e.g. LOR-5418)
+def jira-linkify [text: string]: nothing -> list {
+  if ($text | str length) == 0 { return [] }
+  let base = $"https://((get-jira-config).site)/browse/"
+  let tagged = ($text | str replace --all --regex '([A-Z][A-Z0-9]+-[0-9]+)' '@@K@@${1}@@K@@')
+  $tagged | split row "@@K@@" | enumerate | each {|x|
+    if (($x.index mod 2) == 1) {
+      {type: "text", text: $x.item, marks: [{type: "link", attrs: {href: ($base + $x.item)}}]}
+    } else if (($x.item | str length) > 0) {
+      {type: "text", text: $x.item}
+    } else { null }
+  } | where {|n| $n != null}
+}
+
+# Inline markdown -> ADF text nodes: **bold** *italic* `code` [t](u) + auto Jira-key links
+def md-inline-nodes [line: string]: nothing -> list {
+  mut out = []
+  mut s = $line
+  loop {
+    if ($s | str length) == 0 { break }
+    let f = ([
+      {m: "link", i: ($s | str index-of "["), p: 1}
+      {m: "strong", i: ($s | str index-of "**"), p: 2}
+      {m: "code", i: ($s | str index-of "`"), p: 3}
+      {m: "em", i: ($s | str index-of "*"), p: 4}
+    ] | where i >= 0 | sort-by i p | first)
+    if ($f == null) { $out = ($out | append (jira-linkify $s)); break }
+    if $f.i > 0 { $out = ($out | append (jira-linkify ($s | str substring 0..<$f.i))) }
+    if $f.m == "link" {
+      let mm = ($s | str substring $f.i.. | parse --regex '^\[(?<t>[^\]]*)\]\((?<u>[^)]*)\)')
+      if ($mm | is-empty) {
+        $out = ($out | append {type: "text", text: "["})
+        $s = ($s | str substring ($f.i + 1)..)
+      } else {
+        let m = ($mm | first)
+        $out = ($out | append {type: "text", text: $m.t, marks: [{type: "link", attrs: {href: $m.u}}]})
+        $s = ($s | str substring ($f.i + ($m.t | str length) + ($m.u | str length) + 4)..)
+      }
+    } else {
+      let open = (if $f.m == "strong" { "**" } else if $f.m == "code" { "`" } else { "*" })
+      let olen = ($open | str length)
+      let after = ($s | str substring ($f.i + $olen)..)
+      let close = ($after | str index-of $open)
+      if $close < 0 { $out = ($out | append (jira-linkify ($s | str substring $f.i..))); break }
+      let inner = ($after | str substring 0..<$close)
+      let innernodes = (jira-linkify $inner | each {|n| $n | upsert marks (($n.marks? | default []) | append {type: $f.m})})
+      $out = ($out | append $innernodes)
+      $s = ($after | str substring ($close + $olen)..)
+    }
+  }
+  $out
+}
+
+# House convention: a leading bold "Todo:" marker is auto-colored orange
+def md-color-todo [nodes: list]: nothing -> list {
+  if ($nodes | is-empty) { return $nodes }
+  let f = ($nodes | first)
+  if (($f.text? == "Todo:") and ((($f.marks? | default []) | where {|m| $m.type == "strong"} | length) > 0)) {
+    [($f | upsert marks (($f.marks? | default []) | append {type: "textColor", attrs: {color: "#ff991f"}}))] | append ($nodes | skip 1)
+  } else { $nodes }
+}
+
+# Indent-annotated bullet lines -> nested [{text, children}] tree (recursive)
+def md-tree [items: list]: nothing -> list {
+  if ($items | is-empty) { return [] }
+  let base = ($items | first | get indent)
+  mut result = []
+  mut cur = null
+  mut kids = []
+  for it in $items {
+    if $it.indent <= $base {
+      if $cur != null { $result = ($result | append {text: $cur, children: (md-tree $kids)}) }
+      $cur = $it.text
+      $kids = []
+    } else {
+      $kids = ($kids | append $it)
+    }
+  }
+  if $cur != null { $result = ($result | append {text: $cur, children: (md-tree $kids)}) }
+  $result
+}
+
+def md-li [items: list]: nothing -> list {
+  $items | each {|it|
+    let para = {type: "paragraph", content: (md-color-todo (md-inline-nodes $it.text))}
+    let kids = ($it.children? | default [])
+    let content = if ($kids | is-empty) { [$para] } else { [$para, {type: "bulletList", content: (md-li $kids)}] }
+    {type: "listItem", content: $content}
+  }
+}
+
+# markdown -> ADF doc (paragraphs, # headings, nested -/* bullet lists, inline marks)
+def md-to-adf [md: string]: nothing -> record {
+  let lines = ($md | lines)
+  mut blocks = []
+  mut bullets = []
+  for line in $lines {
+    let bul = ($line | parse --regex '^(?<ind>[ \t]*)[-*]\s+(?<txt>.*)$')
+    let hd = ($line | parse --regex '^(?<h>#{1,6})\s+(?<txt>.*)$')
+    if (not ($bul | is-empty)) {
+      let b = ($bul | first)
+      $bullets = ($bullets | append {indent: ($b.ind | str replace --all "\t" "  " | str length), text: $b.txt})
+    } else if (($line | str trim | str length) == 0) {
+      # blank line: do NOT flush bullets (allows blank lines inside a list)
+    } else {
+      if (not ($bullets | is-empty)) { $blocks = ($blocks | append {type: "bulletList", content: (md-li (md-tree $bullets))}); $bullets = [] }
+      if (not ($hd | is-empty)) {
+        let h = ($hd | first)
+        $blocks = ($blocks | append {type: "heading", attrs: {level: ($h.h | str length)}, content: (md-color-todo (md-inline-nodes $h.txt))})
+      } else {
+        $blocks = ($blocks | append {type: "paragraph", content: (md-color-todo (md-inline-nodes $line))})
+      }
+    }
+  }
+  if (not ($bullets | is-empty)) { $blocks = ($blocks | append {type: "bulletList", content: (md-li (md-tree $bullets))}) }
+  {type: "doc", version: 1, content: $blocks}
+}
+
   # Issue commands - work with Jira tickets
   export def "jira issue" [] {
     print "Jira Issue Commands"
@@ -110,7 +234,8 @@ def get-jira-headers []: nothing -> record {
     print "Usage:"
     print "  jira issue view <ticket>                - View ticket details"
     print "  jira issue update <ticket> <payload>    - Update ticket fields"
-    print "  jira issue create <project> <type> ...  - Create new ticket (--parent <epic>)"
+    print "  jira issue create <project> <type> ...  - Create new ticket (--parent <epic>, --ac <md>)"
+    print "  jira issue ac <ticket> [markdown]        - Read or set Acceptance Criteria (markdown)"
     print "  jira issue link <issue> --blocks <key>  - Link issues (--blocks/--blocked-by/--relates/...)"
     print "  jira issue transition <ticket> <status> - Move ticket between statuses"
     print "  jira issue types [--project]            - List available issue types"
@@ -150,51 +275,60 @@ def get-jira-headers []: nothing -> record {
 
   # Create a new Jira ticket
   #
-  # Create tickets for bugs, tech debt, or new stories. Optionally attach the new
-  # issue to a parent/epic with --parent (works cross-project, e.g. an LOR story
-  # under an RDMP epic).
+  # Create tickets for bugs, tech debt, or new stories. --description and --ac
+  # accept markdown (nested bullets, **bold**, *italic*, `code`, auto-linked Jira
+  # keys). Optionally attach to a parent/epic with --parent (cross-project OK).
   #
   # Example:
   #   jira issue create LOR Task "Refactor authentication module"
   #   jira issue create LOR Bug "Login button not working" --description "Users can't log in on mobile"
-  #   jira issue create LOR Story "Add dark mode support"
   #   jira issue create LOR Story "Add stepper" --parent RDMP-2232  # under an epic
+  #   jira issue create LOR Story "Add stepper" --ac "- **Foo**\n  - bar"  # with acceptance criteria
   export def "jira issue create" [
     project: string,     # Project key (e.g., "LOR")
     type: string,        # Issue type (e.g., "Story", "Bug", "Task")
     summary: string,     # Ticket summary/title
-    --description: string = ""  # Optional description
+    --description: string = ""  # Optional description (markdown supported)
+    --ac: string = ""           # Optional Acceptance Criteria (markdown -> customfield_10039)
     --parent: string = ""       # Optional parent/epic key (e.g., "RDMP-2232"); cross-project OK
   ]: nothing -> record {
-    let desc_content = if ($description | is-empty) {
-      []
-    } else {
-      [{
-        type: "paragraph",
-        content: [{
-          type: "text",
-          text: $description
-        }]
-      }]
-    }
-
-    let base_fields = {
+    mut fields = {
       project: { key: $project },
       issuetype: { name: $type },
       summary: $summary,
-      description: {
-        type: "doc",
-        version: 1,
-        content: $desc_content
-      }
+      description: (md-to-adf $description)
     }
-    let fields = if ($parent | is-empty) { $base_fields } else { $base_fields | insert parent { key: $parent } }
-
-    let payload = ({ fields: $fields } | to json)
+    if (not ($parent | is-empty)) { $fields = ($fields | insert parent { key: $parent }) }
+    if (not ($ac | is-empty)) { $fields = ($fields | insert customfield_10039 (md-to-adf $ac)) }
 
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http post $"https://($config.site)/rest/api/3/issue" $payload --headers $headers --content-type "application/json"
+    http post $"https://($config.site)/rest/api/3/issue" ({ fields: $fields } | to json) --headers $headers --content-type "application/json"
+  }
+
+  # Read or set a ticket's Acceptance Criteria (customfield_10039)
+  #
+  # With no markdown arg, prints the current AC rendered as markdown. With a
+  # markdown arg, replaces the AC: markdown -> ADF (nested bullets, **bold**,
+  # *italic*, `code`, auto-linked Jira keys, auto-orange leading **Todo:** marker).
+  #
+  # Example:
+  #   jira issue ac LOR-5420                                      # read as markdown
+  #   jira issue ac LOR-5420 "*Context.*\n\n- **Foo**\n  - bar"   # set from markdown
+  #   open criteria.md | jira issue ac LOR-5420 $in              # set from a file
+  export def "jira issue ac" [
+    ticket: string      # Ticket key (e.g. LOR-5420)
+    markdown?: string   # If given, set the AC from markdown; otherwise read it
+  ]: nothing -> any {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    if ($markdown == null) {
+      let f = (http get $"https://($config.site)/rest/api/3/issue/($ticket)?fields=customfield_10039" --headers $headers | get fields.customfield_10039?)
+      if ($f == null) { "" } else { confluence-adf-blocks ($f.content? | default []) }
+    } else {
+      let payload = ({fields: {customfield_10039: (md-to-adf $markdown)}} | to json)
+      http put $"https://($config.site)/rest/api/3/issue/($ticket)" $payload --headers $headers --content-type "application/json"
+    }
   }
 
   # Link two issues using a directional shortcut for the relationship
