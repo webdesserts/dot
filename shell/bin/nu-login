@@ -3,7 +3,7 @@
 #
 # Why this exists: nushell doesn't source env.nu when invoked as `nu -c "cmd"`,
 # which is how sshd runs remote commands. That means PATH additions, env vars,
-# and 1Password-loaded secrets are all missing from non-interactive SSH sessions.
+# and secrets loaded from secrets.env are all missing from non-interactive SSH sessions.
 #
 # This wrapper forces `nu -l` (login mode), which always sources env.nu and
 # config.nu — the same behavior interactive sessions get. It passes through
