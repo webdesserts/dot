@@ -21,8 +21,10 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
+  "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
+  "theme": "light",
+  "editorMode": "vim",
   "skipAutoPermissionPrompt": true,
-  "theme": "light-ansi",
-  "editorMode": "vim"
+  "agentPushNotifEnabled": true
 }
