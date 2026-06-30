@@ -3,7 +3,7 @@
 #
 # Usage:
 #   use ~/scripts/personal.nu *
-#   # Now you have access to all personal commands and work commands (if available)
+#   # Now you have access to all personal commands and work commands (if on rhea)
 
 # Re-export common utility modules
 export use ~/scripts/utils.nu *
@@ -11,14 +11,9 @@ export use ~/scripts/externs.nu *
 export use ~/scripts/vscode.nu *
 export use ~/scripts/piano.nu *
 
-# Conditionally load work module (if it exists)
-const work_module = "~/scripts/work.nu"
-const work_module_path = if ($work_module | path exists) { $work_module } else { null }
-
+# Conditionally load work module (rhea only)
 export-env {
-  if ($work_module_path != null) {
+  if ((sys host | get hostname) =~ "rhea") and ("~/scripts/work.nu" | path expand | path exists) {
     use ~/scripts/work.nu
   }
 }
-
-export use $work_module_path *

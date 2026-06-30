@@ -135,9 +135,9 @@ let secrets_file = ("~/.config/secrets.env" | path expand)
 if ($secrets_file | path exists) { parse-secrets $secrets_file | load-env }
 
 # === Work-specific config (rhea only) ===
-const work_env_file = "~/scripts/work-env.nu"
-if ((sys host | get hostname) =~ "rhea") and ($work_env_file | path exists) {
+if (sys host | get hostname) =~ "rhea" {
+  let work_env = ("~/.config/work.env" | path expand)
+  if ($work_env | path exists) { parse-secrets $work_env | load-env }
   let work_secrets = ("~/.config/secrets-work.env" | path expand)
   if ($work_secrets | path exists) { parse-secrets $work_secrets | load-env }
-  source-env $work_env_file
 }
