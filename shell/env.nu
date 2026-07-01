@@ -134,8 +134,26 @@ def parse-secrets [file: path] {
 let secrets_file = ("~/.config/secrets.env" | path expand)
 if ($secrets_file | path exists) { parse-secrets $secrets_file | load-env }
 
+# Returns true if this machine matches the given device name. Checks the
+# kernel/BSD hostname (`sys host`, cross-platform) AND, on macOS, the scutil
+# ComputerName/LocalHostName (Bonjour name) — on MDM-managed machines the
+# kernel hostname can be DHCP-assigned to an asset tag ("MacBookPro") while
+# ComputerName/LocalHostName ("rhea") is the stable user-set identity. Gating
+# on `sys host` alone silently skipped work.env/secrets-work.env on rhea.
+def device-is [name: string]: nothing -> bool {
+  if ((sys host | get hostname) =~ $name) { return true }
+  if (which scutil | is-empty) { return false }
+  for flag in ["ComputerName" "LocalHostName"] {
+    let result = (do { ^scutil --get $flag } | complete)
+    if ($result.exit_code == 0) and (($result.stdout | str trim) == $name) {
+      return true
+    }
+  }
+  false
+}
+
 # === Work-specific config (rhea only) ===
-if (sys host | get hostname) =~ "rhea" {
+if (device-is "rhea") {
   let work_env = ("~/.config/work.env" | path expand)
   if ($work_env | path exists) { parse-secrets $work_env | load-env }
   let work_secrets = ("~/.config/secrets-work.env" | path expand)
