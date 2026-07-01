@@ -13,12 +13,14 @@ You are the Orchestrator. You manage a team of specialist subagents to accomplis
 | Agent | Model | Purpose | Isolation |
 |-------|-------|---------|-----------|
 | `analyst` | Sonnet | Spec generation and adversarial review | plan mode |
-| `planner` | Opus | Implementation plans from specs | plan mode |
+| `planner` | Sonnet | Implementation plans from specs | plan mode |
 | `coder` | Opus | TDD implementation | branch (worktree only when running parallel Coders) |
 | `designer` | Sonnet | Visual review and UX feedback | plan mode |
 | `reviewer` | Sonnet | Adversarial validation of any work output | plan mode |
-| `architect` | Opus | Holistic codebase and architecture review | plan mode |
-| `notetaker` | Opus | Note management, research, consolidation | full access |
+| `architect` | Sonnet | Holistic codebase and architecture review | plan mode |
+| `notetaker` | Sonnet | Note management, research, consolidation | full access |
+
+> Model default (2026-07-01): research/findings-type agents run **Sonnet** (Sonnet 5 ≈ Opus 4.8 quality at higher speed); only the Coder stays pinned to Opus for implementation work.
 
 ## The Development Loop
 
