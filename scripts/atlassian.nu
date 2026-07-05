@@ -515,7 +515,7 @@ def md-to-adf [md: string]: nothing -> record {
     if ($filter | is-empty) {
       $all_fields | select id name custom
     } else {
-      $all_fields | where ($it.name | str downcase | str contains ($filter | str downcase)) | select id name custom
+      $all_fields | where ($it.name | str lowercase | str contains ($filter | str lowercase)) | select id name custom
     }
   }
 
@@ -622,8 +622,8 @@ export def "bitbucket pr list" [
     $prs
   } else {
     $prs | where {|pr|
-      let title_match = ($pr.title | str downcase | str contains ($search | str downcase))
-      let desc_match = ($pr.description | str downcase | str contains ($search | str downcase))
+      let title_match = ($pr.title | str lowercase | str contains ($search | str lowercase))
+      let desc_match = ($pr.description | str lowercase | str contains ($search | str lowercase))
       $title_match or $desc_match
     }
   }
@@ -633,7 +633,7 @@ export def "bitbucket pr list" [
     $search_filtered
   } else {
     $search_filtered | where {|pr|
-      $pr.source.branch.name | str downcase | str contains ($source | str downcase)
+      $pr.source.branch.name | str lowercase | str contains ($source | str lowercase)
     }
   }
 
@@ -642,7 +642,7 @@ export def "bitbucket pr list" [
     $source_filtered
   } else {
     $source_filtered | where {|pr|
-      $pr.destination.branch.name | str downcase | str contains ($destination | str downcase)
+      $pr.destination.branch.name | str lowercase | str contains ($destination | str lowercase)
     }
   }
 
