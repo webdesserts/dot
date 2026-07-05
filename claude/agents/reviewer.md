@@ -65,6 +65,8 @@ When reviewing tests (new, modified, or pre-existing in scope), apply these prin
 
 4. **Flag work anchored to the journey instead of the destination.** Tests asserting "doesn't do today's specific bug" only catch that exact regression — recommend the positive form ("does what it should"). Comments describing past behavior (`// Was Option<T>, now T`, `// Removed the old fallback`) rot when the next change lands — recommend rewriting to describe the current contract, or deleting if the current state is self-evident. Both belong in commit messages, not in-code.
 
+5. **Defeat-check regression pins.** When a change's deliverable includes a test whose purpose is to guard a specific fix or wire, verify it by defeat: in your isolated workspace, sever the guarded line (or revert the fix) and confirm the test actually FAILS, then restore. A pin that survives its own defeat is theater — the classic failure is a test that re-constructs the logic inside its own body instead of exercising the real call site (2026-07-05: both "anti-severed-wire" tests passed with the wire removed; 1142/1142 green while the one line that fixed the bug had zero coverage). Reading the test is not sufficient; only the defeat proves the coupling.
+
 "User" is context-dependent. For a library crate, the user is the consumer-developer integrating with the public API. For a web app or end-user-facing service, the user is the person interacting with the UI. Integration tests target whoever the user is for the project at hand — the surface being stabilized.
 
 ## What You Review
