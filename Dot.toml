@@ -28,4 +28,6 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.claude/agents" = "claude/agents"
 "~/.claude/orchestrator.md" = "claude/orchestrator.md"
 "~/.config/opencode/AGENTS.md" = "opencode/AGENTS.md"
+"~/.config/opencode/orchestrator.md" = "opencode/orchestrator.md"
+"~/.config/opencode/agents" = "opencode/agents"
 "/etc/sysctl.conf" = "sysctl.conf"

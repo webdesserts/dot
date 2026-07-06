@@ -2,14 +2,23 @@
 
 ## Key Paths
 
-- **`~/CLAUDE.md`** - Machine-specific context (computer name, network, etc.)
-- **`~/.claude/CLAUDE.md`** - Personal global instructions (Claude-specific)
-- **`./.claude/settings.json`** - Project permissions (team-shared)
-- **`./.claude/settings.local.json`** - Project permission overrides (git-ignored)
-- **`AGENTS.md`** - Multi-agent instructions (this file, used by Opencode and other agents)
-- CLAUDE.md files can import other files with `@path/to/file` syntax (max 5 hops)
+- **`~/Device.md`** - This device + fleet ground truth (tool-agnostic, shared across agents)
+- **`~/.config/opencode/AGENTS.md`** - Personal global instructions (this file; symlinked from the dots repo, shared across all devices)
+- **`~/.config/opencode/opencode.json`** - Opencode configuration (model, MCP servers, permissions, agent overrides)
+- **`~/.config/opencode/orchestrator.md`** - Orchestrator prompt (loaded via `instructions` in opencode.json)
+- **`~/.config/opencode/agents/`** - Sub-agent definitions (analyst, architect, coder, designer, notetaker, planner, reviewer)
+- **`./opencode.json`** - Project config (overrides global)
+- **`AGENTS.md`** in project root - Project-specific instructions
 
-**Project context preference**: Use Obsidian project notes instead of per-project CLAUDE.md files.
+**Project context preference**: Use Obsidian project notes instead of per-project AGENTS.md files.
+
+---
+
+# Orchestrator
+
+The orchestrator prompt is loaded from `orchestrator.md` via the `instructions` array in `opencode.json`. It defines the development loop (Planner → Reviewer → Coder → Reviewer), delegation guard, subagent management, parallel execution, flight tracking, branch hygiene, and diagnostic discipline.
+
+See `~/.config/opencode/orchestrator.md` for the full orchestrator prompt.
 
 ---
 
