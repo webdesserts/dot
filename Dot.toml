@@ -35,6 +35,7 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.pi/agent/AGENTS.md" = "pi/AGENTS.md"
 "~/.pi/agent/agents" = "pi/agents"
 "~/.pi/agent/extensions/harness-context.ts" = "pi/extensions/harness-context.ts"
+"~/.pi/agent/hindsight.json" = "pi/hindsight.json"
 "~/.pi/agent/models.json" = "pi/models.json"
 "~/.pi/agent/settings.json" = "pi/settings.json"
 "~/.pi/agent/themes" = "pi/themes"

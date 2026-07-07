@@ -4,7 +4,8 @@
   "defaultThinkingLevel": "xhigh",
   "packages": [
     "npm:pi-provider-umans",
-    "npm:pi-mcp-adapter"
+    "npm:pi-mcp-adapter",
+    "npm:@luxusai/pi-hindsight"
   ],
   "compaction": {
     "enabled": true,

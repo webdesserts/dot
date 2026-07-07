@@ -1,0 +1,15 @@
+{
+  "hindsight": {
+    "baseUrl": "http://127.0.0.1:8888"
+  },
+  "banks": {
+    "user": {
+      "enabled": true,
+      "bankId": "user"
+    }
+  },
+  "recall": {
+    "topK": 8,
+    "maxTokens": 800
+  }
+}
