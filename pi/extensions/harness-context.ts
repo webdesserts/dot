@@ -26,15 +26,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const HOME = os.homedir();
 const ORCHESTRATOR = path.join(HOME, ".config/agents/orchestrator.md");
-const NOTETAKING = path.join(HOME, ".dots/webdesserts-private/obsidian-memory/notetaking.md");
+const NOTETAKING = path.join(HOME, ".config/agents/notetaking.md");
 const DEVICE = path.join(HOME, "Device.md");
 const WORKING_MEMORY = path.join(HOME, "notes/Working Memory.md");
 
 function readSafe(p: string): string {
 	try {
 		return fs.readFileSync(p, "utf-8").trim();
-	} catch {
-		return "";
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+		const message = err instanceof Error ? err.message : String(err);
+		return `> ⚠ HARNESS-CONTEXT: failed to read ${p}: ${message} — content missing this turn, retry or investigate.`;
 	}
 }
 
