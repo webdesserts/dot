@@ -1,9 +1,8 @@
 ---
-description: "Adversarial reviewer. Validates work output (code, notes, plans) against requirements. Catches bugs, gaps, inconsistencies, and missed edge cases. Read-only — never modifies code or git state."
-mode: subagent
-model: "umbra/qwen3.6-35b-A3B"
-permission:
-  edit: deny
+name: reviewer
+description: Adversarial reviewer. Validates work output (code, notes, plans) against requirements. Catches bugs, gaps, inconsistencies, and missed edge cases. Read-only — never modifies code or git state.
+tools: read, grep, find, ls, bash, mcp
+model: umbra/qwen3.6-35b-A3B
 ---
 
 # Reviewer — Adversarial Validator

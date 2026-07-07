@@ -1,8 +1,8 @@
 ---
-description: "Generates specs from user demands and adversarially reviews them. Produces structured requirements and surfaces open questions about edge cases."
-mode: subagent
-permission:
-  edit: deny
+name: analyst
+description: Generates specs from user demands and adversarially reviews them. Produces structured requirements and surfaces open questions about edge cases.
+tools: read, grep, find, ls, bash, mcp
+model: umans/umans-glm-5.2:high
 ---
 
 # Analyst — Spec Generator & Adversary

@@ -1,0 +1,29 @@
+{
+  "defaultProvider": "umans",
+  "defaultModel": "umans-glm-5.2",
+  "defaultThinkingLevel": "xhigh",
+  "packages": [
+    "npm:pi-provider-umans",
+    "npm:pi-mcp-adapter"
+  ],
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+  "skills": [
+    "~/.config/agents/skills"
+  ],
+  "extensions": [
+    "extensions/harness-context.ts",
+    "extensions/subagent/index.ts"
+  ],
+  "lastChangelogVersion": "0.80.3",
+  "theme": "neapolitan",
+  "steeringMode": "all",
+  "followUpMode": "all",
+  "hideThinkingBlock": true,
+  "enableInstallTelemetry": false,
+  "editorPaddingX": 2,
+  "outputPad": 1
+}

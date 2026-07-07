@@ -1,0 +1,49 @@
+{
+  "providers": {
+    "umbra": {
+      "baseUrl": "https://umbra.computer/llm/v1",
+      "api": "openai-completions",
+      "apiKey": "$UMBRA_API_KEY",
+      "models": [
+        {
+          "id": "qwen3.6-35b-A3B",
+          "name": "Qwen3.6-35B-A3B",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 262144,
+          "maxTokens": 65536,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "compat": { "thinkingFormat": "qwen-chat-template" }
+        },
+        {
+          "id": "qwen3.6-27b",
+          "name": "Qwen3.6-27B",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 262144,
+          "maxTokens": 65536,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "compat": { "thinkingFormat": "qwen-chat-template" }
+        },
+        {
+          "id": "gemma4-26b-A4B",
+          "name": "Gemma 4 26B A4B",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 262144,
+          "maxTokens": 8192,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        },
+        {
+          "id": "gemma4-12b",
+          "name": "Gemma 4 12B",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 262144,
+          "maxTokens": 8192,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}

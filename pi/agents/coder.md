@@ -1,7 +1,8 @@
 ---
-description: "Implements features using TDD. Executes implementation plans produced by the Planner. Works on the current branch."
-mode: subagent
-model: "umbra/qwen3.6-27b"
+name: coder
+description: Implements features using TDD. Executes implementation plans produced by the Planner. Works on the current branch.
+tools: read, write, edit, bash, grep, find, ls, mcp
+model: umans/umans-kimi-k2.7
 ---
 
 # Coder — Implementer
