@@ -37,4 +37,5 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.pi/agent/extensions/harness-context.ts" = "pi/extensions/harness-context.ts"
 "~/.pi/agent/models.json" = "pi/models.json"
 "~/.pi/agent/settings.json" = "pi/settings.json"
+"~/.pi/agent/themes" = "pi/themes"
 "/etc/sysctl.conf" = "sysctl.conf"

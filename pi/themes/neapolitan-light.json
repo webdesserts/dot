@@ -1,0 +1,83 @@
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "neapolitan-light",
+  "vars": {
+    "surfaceBase": "#FBEEEC",
+    "surfaceRaised": "#EDDFDD",
+    "textPrimary": "#352B35",
+    "textSecondary": "#746770",
+    "textMuted": "#9A8D95",
+    "borderSubtle": "#E5D9D7",
+    "borderDefault": "#9D8D8A",
+    "selectionTint": "#E0D1CE",
+    "accent": "#EF4780",
+    "danger": "#DC3139",
+    "dangerSurface": "#EFC8C3",
+    "success": "#00A481",
+    "successSurface": "#C4DDCD"
+  },
+  "colors": {
+    "accent": "accent",
+    "border": "borderDefault",
+    "borderAccent": "accent",
+    "borderMuted": "borderSubtle",
+    "success": "success",
+    "error": "danger",
+    "warning": "danger",
+    "muted": "textSecondary",
+    "dim": "textMuted",
+    "text": "textPrimary",
+    "thinkingText": "textSecondary",
+
+    "selectedBg": "selectionTint",
+    "userMessageBg": "surfaceRaised",
+    "userMessageText": "textPrimary",
+    "customMessageBg": "surfaceRaised",
+    "customMessageText": "textPrimary",
+    "customMessageLabel": "accent",
+    "toolPendingBg": "surfaceRaised",
+    "toolSuccessBg": "successSurface",
+    "toolErrorBg": "dangerSurface",
+    "toolTitle": "textPrimary",
+    "toolOutput": "textSecondary",
+
+    "mdHeading": "accent",
+    "mdLink": "accent",
+    "mdLinkUrl": "textSecondary",
+    "mdCode": "accent",
+    "mdCodeBlock": "textPrimary",
+    "mdCodeBlockBorder": "textMuted",
+    "mdQuote": "textSecondary",
+    "mdQuoteBorder": "borderSubtle",
+    "mdHr": "borderSubtle",
+    "mdListBullet": "accent",
+
+    "toolDiffAdded": "success",
+    "toolDiffRemoved": "danger",
+    "toolDiffContext": "textSecondary",
+
+    "syntaxComment": "textMuted",
+    "syntaxKeyword": "accent",
+    "syntaxFunction": "textPrimary",
+    "syntaxVariable": "textPrimary",
+    "syntaxString": "textSecondary",
+    "syntaxNumber": "textSecondary",
+    "syntaxType": "accent",
+    "syntaxOperator": "textSecondary",
+    "syntaxPunctuation": "textMuted",
+
+    "thinkingOff": "borderSubtle",
+    "thinkingMinimal": "textMuted",
+    "thinkingLow": "textSecondary",
+    "thinkingMedium": "textPrimary",
+    "thinkingHigh": "accent",
+    "thinkingXhigh": "accent",
+
+    "bashMode": "accent"
+  },
+  "export": {
+    "pageBg": "surfaceBase",
+    "cardBg": "surfaceRaised",
+    "infoBg": "dangerSurface"
+  }
+}

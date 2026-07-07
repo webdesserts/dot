@@ -19,7 +19,7 @@
     "extensions/subagent/index.ts"
   ],
   "lastChangelogVersion": "0.80.3",
-  "theme": "neapolitan",
+  "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",
   "hideThinkingBlock": true,
