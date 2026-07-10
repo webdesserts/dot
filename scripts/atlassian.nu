@@ -103,6 +103,50 @@ def get-jira-headers []: nothing -> record {
   }
 }
 
+# Perform a write request (POST/PUT/DELETE) and surface the real error detail on
+# failure. Plain `http post`/`http put` throw nushell's generic "Bad request
+# (400)" on a non-2xx and discard the response body - but Jira/Bitbucket put the
+# actual reason there (e.g. "Parent is required.", "Given parent work item does
+# not belong to appropriate hierarchy."). This wraps the call with
+# --allow-errors so the body survives, then raises an error carrying that detail
+# on failure, or returns the body on success (matching what a bare `http` call
+# would've returned).
+def http-checked [
+  method: string,        # "post" | "put" | "delete"
+  url: string,
+  headers: record,
+  body?: any,             # omit for a bodyless request (e.g. bitbucket decline)
+  content_type?: string
+]: nothing -> any {
+  let resp = (match $method {
+    "post" => (
+      if ($body == null) {
+        http post $url --headers $headers --allow-errors --full
+      } else if ($content_type == null) {
+        http post $url $body --headers $headers --allow-errors --full
+      } else {
+        http post $url $body --headers $headers --content-type $content_type --allow-errors --full
+      }
+    )
+    "put" => (
+      if ($content_type == null) {
+        http put $url $body --headers $headers --allow-errors --full
+      } else {
+        http put $url $body --headers $headers --content-type $content_type --allow-errors --full
+      }
+    )
+    "delete" => (http delete $url --headers $headers --allow-errors --full)
+    _ => { error make {msg: $"http-checked: unsupported method '($method)'"} }
+  })
+
+  if $resp.status >= 200 and $resp.status < 300 {
+    $resp.body
+  } else {
+    let detail = if (($resp.body | describe) == "string") { $resp.body } else { ($resp.body | to json) }
+    error make {msg: $"HTTP ($resp.status) from ($url): ($detail)"}
+  }
+}
+
 # --- markdown -> ADF (Atlassian Document Format) -------------------------------
 # Inverse of confluence-adf-blocks (ADF -> markdown). Lets the jira commands take
 # rich markdown (nested bullets, headings, **bold**/*italic*/`code`, [t](u) links,
@@ -240,6 +284,7 @@ def md-to-adf [md: string]: nothing -> record {
     print "  jira issue update <ticket> <payload>    - Update ticket fields"
     print "  jira issue create <project> <type> ...  - Create new ticket (--parent <epic>, --ac <md>)"
     print "  jira issue ac <ticket> [markdown]        - Read or set Acceptance Criteria (markdown)"
+    print "  jira issue description <ticket> [md]    - Read or set the Description field (markdown)"
     print "  jira issue link <issue> --blocks <key>  - Link issues (--blocks/--blocked-by/--relates/...)"
     print "  jira issue transition <ticket> <status> - Move ticket between statuses"
     print "  jira issue types [--project]            - List available issue types"
@@ -247,18 +292,29 @@ def md-to-adf [md: string]: nothing -> record {
     print "Run 'help jira issue <command>' for detailed usage"
   }
 
-  # View a Jira ticket with all fields
+  # View a Jira ticket
   #
-  # Returns JSON with all ticket data including custom fields
+  # Returns a curated set of fields by default - the full raw ticket is 100+
+  # fields wide and silently renders as empty output in some terminals/tools
+  # (looks like the command "returned nothing" when it actually succeeded).
+  # Pass --fields to choose exactly what you need, same syntax as `jira search`.
   #
   # Example:
-  #   jira issue view LOR-4262
-  #   jira issue view LOR-4262 | get fields.summary
-  #   jira issue view LOR-4262 | get fields.customfield_10039  # Acceptance Criteria
-  export def "jira issue view" [ticket: string]: nothing -> record {
+  #   jira issue view LOR-4262                                   # curated default fields
+  #   jira issue view LOR-4262 --fields 'summary,status'         # just these
+  #   jira issue view LOR-4262 --fields '*all'                   # full raw record (100+ fields)
+  #   jira issue view LOR-4262 | get fields.customfield_10039    # Acceptance Criteria
+  export def "jira issue view" [
+    ticket: string
+    --fields: string = "key,summary,status,assignee,issuetype,priority,parent,description,customfield_10039,issuelinks,created,updated"
+  ]: nothing -> record {
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http get $"https://($config.site)/rest/api/3/issue/($ticket)" --headers $headers
+    if $fields == "*all" {
+      http get $"https://($config.site)/rest/api/3/issue/($ticket)" --headers $headers
+    } else {
+      http get $"https://($config.site)/rest/api/3/issue/($ticket)?fields=($fields)" --headers $headers
+    }
   }
 
   # Update a Jira ticket with JSON payload
@@ -274,7 +330,7 @@ def md-to-adf [md: string]: nothing -> record {
   ]: nothing -> any {
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http put $"https://($config.site)/rest/api/3/issue/($ticket)" $payload --headers $headers --content-type "application/json"
+    http-checked "put" $"https://($config.site)/rest/api/3/issue/($ticket)" $headers $payload "application/json"
   }
 
   # Create a new Jira ticket
@@ -307,7 +363,7 @@ def md-to-adf [md: string]: nothing -> record {
 
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http post $"https://($config.site)/rest/api/3/issue" ({ fields: $fields } | to json) --headers $headers --content-type "application/json"
+    http-checked "post" $"https://($config.site)/rest/api/3/issue" $headers ({ fields: $fields } | to json) "application/json"
   }
 
   # Read or set a ticket's Acceptance Criteria (customfield_10039)
@@ -332,7 +388,33 @@ def md-to-adf [md: string]: nothing -> record {
       if ($f == null) { "" } else { confluence-adf-blocks ($f.content? | default []) }
     } else {
       let payload = ({fields: {customfield_10039: (md-to-adf $markdown)}} | to json)
-      http put $"https://($config.site)/rest/api/3/issue/($ticket)" $payload --headers $headers --content-type "application/json"
+      http-checked "put" $"https://($config.site)/rest/api/3/issue/($ticket)" $headers $payload "application/json"
+    }
+  }
+
+  # Read or set a ticket's Description field
+  #
+  # With no markdown arg, prints the current description rendered as markdown.
+  # With a markdown arg, replaces the description: markdown -> ADF (nested
+  # bullets, **bold**, *italic*, `code`, auto-linked Jira keys, auto-colored
+  # leading **Todo:** (orange) / **Note:** (blue) markers).
+  #
+  # Example:
+  #   jira issue description LOR-5420                                      # read as markdown
+  #   jira issue description LOR-5420 "*Context.*\n\n- **Foo**\n  - bar"   # set from markdown
+  #   open desc.md | jira issue description LOR-5420 $in                  # set from a file
+  export def "jira issue description" [
+    ticket: string      # Ticket key (e.g. LOR-5420)
+    markdown?: string   # If given, set the description from markdown; otherwise read it
+  ]: nothing -> any {
+    let config = (get-jira-config)
+    let headers = (get-jira-headers)
+    if ($markdown == null) {
+      let f = (http get $"https://($config.site)/rest/api/3/issue/($ticket)?fields=description" --headers $headers | get fields.description?)
+      if ($f == null) { "" } else { confluence-adf-blocks ($f.content? | default []) }
+    } else {
+      let payload = ({fields: {description: (md-to-adf $markdown)}} | to json)
+      http-checked "put" $"https://($config.site)/rest/api/3/issue/($ticket)" $headers $payload "application/json"
     }
   }
 
@@ -378,7 +460,7 @@ def md-to-adf [md: string]: nothing -> record {
     } | to json)
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http post $"https://($config.site)/rest/api/3/issueLink" $payload --headers $headers --content-type "application/json"
+    http-checked "post" $"https://($config.site)/rest/api/3/issueLink" $headers $payload "application/json"
   }
 
   # Transition a ticket to a new status
@@ -408,7 +490,7 @@ def md-to-adf [md: string]: nothing -> record {
 
     # Execute the transition
     let payload = ({transition: {id: $transition_id}} | to json)
-    http post $"https://($config.site)/rest/api/3/issue/($ticket)/transitions" $payload --headers $headers --content-type "application/json"
+    http-checked "post" $"https://($config.site)/rest/api/3/issue/($ticket)/transitions" $headers $payload "application/json"
   }
 
   # List available issue types
@@ -474,7 +556,7 @@ def md-to-adf [md: string]: nothing -> record {
 
     let config = (get-jira-config)
     let headers = (get-jira-headers)
-    http post $"https://($config.site)/rest/api/3/issue/($ticket)/comment" $payload --headers $headers --content-type "application/json"
+    http-checked "post" $"https://($config.site)/rest/api/3/issue/($ticket)/comment" $headers $payload "application/json"
   }
 
   # Search for Jira tickets using JQL
@@ -661,21 +743,39 @@ export def "bitbucket pr list" [
 
 # View details of a specific pull request
 #
-# Returns full PR information for the given PR ID.
-# The response is a nushell record that can be piped to get specific fields.
+# Returns a curated summary by default - the raw PR record is a deeply nested
+# ~25KB object (reviewers, participants, rendered markup, etc.) that silently
+# renders as empty output in some terminals/tools (looks like the command
+# "returned nothing" when it actually succeeded). Pass --full for the raw record.
 #
 # Example:
-#   bitbucket pr view 123                 # View full PR details
+#   bitbucket pr view 123                 # curated summary (title/state/author/branches/description/url)
 #   bitbucket pr view 123 | get title     # Get just the title
-#   bitbucket pr view 123 | get author    # Get author info
-#   bitbucket pr view 123 | get links.html.href  # Get PR URL
+#   bitbucket pr view 123 --full          # full raw record
+#   bitbucket pr view 123 --full | get links.html.href
 export def "bitbucket pr view" [
   id: int  # Pull request ID number
+  --full   # Return the full raw PR record instead of the curated summary
 ]: nothing -> record {
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)"
-  http get $url --headers $headers
+  let pr = (http get $url --headers $headers)
+  if $full {
+    $pr
+  } else {
+    {
+      id: $pr.id,
+      title: $pr.title,
+      state: $pr.state,
+      author: $pr.author.display_name,
+      source: $pr.source.branch.name,
+      destination: $pr.destination.branch.name,
+      created_on: $pr.created_on,
+      description: $pr.description,
+      url: $pr.links.html.href
+    }
+  }
 }
 
 # Create a new pull request
@@ -731,7 +831,7 @@ export def "bitbucket pr create" [
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests"
-  let result = http post $url ($payload | to json) --headers $headers --content-type "application/json"
+  let result = http-checked "post" $url $headers ($payload | to json) "application/json"
   print -e $"PR #($result.id): ($result.links.html.href)"
   $result
 }
@@ -768,7 +868,7 @@ export def "bitbucket pr edit" [
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)"
-  let result = http put $url $data --headers $headers --content-type "application/json"
+  let result = http-checked "put" $url $headers $data "application/json"
   print -e $"PR #($result.id): ($result.links.html.href)"
   $result
 }
@@ -862,7 +962,7 @@ export def "bitbucket pr comment create" [
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)/comments"
-  http post $url ($payload | to json) --headers $headers --content-type "application/json"
+  http-checked "post" $url $headers ($payload | to json) "application/json"
 }
 
 # Decline a pull request
@@ -886,14 +986,14 @@ export def "bitbucket pr decline" [
   let url = $"https://api.bitbucket.org/2.0/repositories/($repo.workspace)/($repo.repo)/pullrequests/($id)/decline"
 
   if ($message | is-empty) {
-    http post $url --headers $headers
+    http-checked "post" $url $headers
   } else {
     let data = {
       content: {
         raw: $message
       }
     } | to json
-    http post $url $data --headers $headers --content-type "application/json"
+    http-checked "post" $url $headers $data "application/json"
   }
 }
 
