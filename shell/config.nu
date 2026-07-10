@@ -6,6 +6,11 @@ use ~/scripts/personal.nu *
 use ~/scripts/themes.nu
 use ~/scripts/prompts.nu
 
+# Foundry `pi` wrapper from the private work module. Inert without the rhea-gated
+# work.env value (PI_FOUNDRY_EXTENSION), so it's a plain passthrough off-rhea.
+# (nushell can't conditionally `use`; the wrapper self-gates instead.)
+use ~/scripts/work.nu pi
+
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
 
