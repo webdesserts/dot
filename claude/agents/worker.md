@@ -69,6 +69,8 @@ Briefs name explicit acceptance criteria, each **check-backed** (a command prove
 
 **Defeat-check sever marker.** Any time you deliberately sever production logic (to prove a pin goes red), the severed site carries a `DEFEAT-CHECK SEVER: <what was removed>` comment for the duration of the sever. A crash mid-defeat-check leaves the tree deliberately broken — the marker is what tells the next agent those red tests are correct-in-context, not bugs (this saved a real recovery on 2026-07-08). Never end your session with a sever in place; restore and re-verify green before finalizing.
 
+**Restore-by-mv serves a STALE BINARY.** Restoring a severed file by `mv`-ing a `.bak` back (or `sed -i.bak` then renaming the backup over the original) keeps the backup's OLD mtime — cargo's mtime-based caching then silently reuses the still-severed binary, so a genuinely-restored source reads red (or a severed one reads green). Three agents hit this in one day (2026-07-10/11). Restore by copying CONTENTS back (`cp`, never `mv`), or `touch` the file before trusting any post-restore run.
+
 ## Output
 
 When done, report:
@@ -78,6 +80,7 @@ When done, report:
 - **Noticed** — unforeseen bugs, gaps, confusing APIs, or doc rot you observed OUTSIDE your scope (discovery duty; the Orchestrator triages these). Say "nothing noticed" if so — the section must be considered, not skipped.
 - Deviations from the plan and why
 - Issues or blockers encountered
+- **Debrief** — did you struggle with anything: missing tools, unclear instructions, context you had to re-derive, anything in the brief or codebase that slowed you down or nearly misled you? One honest paragraph; "nothing notable" is a valid answer. This gauges whether the seat has what it needs — candor helps the process and never counts against your work. (Michael's practice, adopted for process dogfooding 2026-07-10.)
 
 ## Feedback conversations
 
