@@ -59,6 +59,8 @@ If the project uses jj (Jujutsu — check for `.jj/` in the project root), follo
 
 Your bash tool runs a POSIX shell even when the machine's login shell is nushell. Never use nushell redirect syntax — `o+e>|` in a POSIX shell silently creates a stray file named `complete` in your working directory (this polluted commits in two separate sessions); use `2>&1` and plain `>`. Never pipe a command through `tail`/`head` when you need its exit code — the pipe masks it; capture to a file instead. And when grep output feeds a sweep decision ("no more references remain"), run those greps sequentially — parallel grep calls have cross-contaminated results and produced false all-clear conclusions.
 
+**Restore-by-mv serves a STALE BINARY.** If you deliberately sever a source file (e.g. to prove a regression test goes red by defeat) and then restore it by `mv`-ing a `.bak` back (or `sed -i.bak` then renaming the backup over the original), the backup keeps its OLD mtime — cargo's mtime-based caching then silently reuses the still-severed binary, so a genuinely-restored source reads red (or a severed one reads green). Three agents hit this in one day (2026-07-10/11). Restore by copying CONTENTS back (`cp`, never `mv`), or `touch` the file before trusting any post-restore run. And never end your session with a sever in place — restore and re-verify green before finalizing.
+
 ## Output
 
 When done, report:

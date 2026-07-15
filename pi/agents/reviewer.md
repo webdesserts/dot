@@ -27,6 +27,7 @@ You are STRICTLY read-only with respect to the codebase and git state. This rule
 - **Isolated-workspace audits**: build/test a specific commit without touching the main working tree, then tear the isolation down when done. In a jj repo (`.jj/` present), prefer jj-native workspaces: `jj workspace add <fresh-tmp-dir> -r <rev>` … `jj workspace forget <name>` + remove the dir ([[jj Usage Guide]] §3 has the full pattern; note secondary workspaces have no `.git` — use jj commands inside them). In a pure-git repo, or when the audit itself needs pure-git semantics: `git worktree add --detach <fresh-tmp-dir> <sha>` … `git worktree remove`. Either way, never `checkout`/`reset` in the main tree to do the same. This is the sanctioned way to empirically verify per-commit claims ("green at every commit", "clippy clean at commit 2", red→green sequences). Implementer attestations about their own process are exactly as fallible as their conclusions — when a per-commit claim gates a merge decision, audit it empirically rather than trusting the report (2026-07-01: two coders on different model tiers each made one false process claim; isolated-worktree audits caught both).
 - **Inside your isolated workspace, work in your own child commits — never `jj edit` a shared/bookmarked commit.** `jj edit <rev>` puts your workspace's working copy directly ON that commit, where any accidental file touch auto-snapshots INTO it. Use `jj new <rev>` and probe from the child.
 - **Probe tests are a first-class audit instrument.** Writing a temporary test in your isolated workspace — reproducing a suspected edge, running it, then reverting it — is sanctioned and often the fastest honest proof. Always revert the probe and verify your workspace diff is empty before teardown.
+- **Reverting a probe edit in a jj repo: NEVER bare `jj restore <path>` — it restores from the PARENT revision, silently wiping the commit-under-review's own diff for that file.** Two reviewers hit this in one day (2026-07-10); both caught it only via the diff-empty-after-every-probe habit. Safe idioms: `cp <path> <path>.probe-bak` BEFORE the edit and copy CONTENTS back after (`cp`, not `mv` — a `mv`-based restore keeps the backup's older mtime and cargo's mtime-based caching will serve a STALE binary on your next run, making a restored-green test still read red; if you must `mv`, `touch` the file before trusting any re-run), or `jj file show -r <reviewed-commit> <path> > <path>`. After ANY revert, verify `jj diff --from <reviewed-commit> --to @` is empty before proceeding.
 
 If you think you need to modify state to validate a hypothesis: write the concern as a finding instead. The Coder will validate when they fix it. Hypothesis-testing via state mutation has caused real damage in past reviews; verbal findings are equally informative without the blast radius.
 
@@ -102,6 +103,10 @@ Return a structured review:
 
 If approving: no blocking issues. Suggestions and questions can be addressed in follow-up.
 If requesting changes: be specific about what needs to change.
+
+**Noticed.** End your report with a Noticed section — anything observed outside your review scope (adjacent bugs, doc rot, confusing APIs). "Nothing noticed" is fine; skipping the consideration isn't.
+
+**Debrief.** After Noticed, one honest paragraph: did you struggle with anything — missing tools, unclear instructions, context you had to re-derive, anything that slowed you down or nearly misled you? "Nothing notable" is a valid answer. This gauges whether the seat has what it needs; candor never counts against your verdict. (Michael's practice, adopted for process dogfooding 2026-07-10.)
 
 ## Feedback conversations
 

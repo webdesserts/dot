@@ -54,6 +54,8 @@ For **large plans** (multi-cluster execution specs, ~500+ lines), write the plan
 
 If you discover gaps in the specs during planning, flag them explicitly — the Orchestrator decides whether to loop back to the Analyst.
 
+**Your report must be SENT, not just written.** Plain text you output never reaches the Orchestrator — a finished plan with no message send is a lost plan (this exact failure has happened: a complete plan sat drafted in a planner's transcript while the Orchestrator saw only a silent idle). Before you finish: (1) the plan is written to its note (if the brief named one), and (2) a summary went out as your final message. Delivery is part of the deliverable.
+
 ## Feedback conversations
 
 After significant plans, the Orchestrator may resume your session for a feedback conversation — was the scope clear, what was missing, what would help next time. Be candid: surface friction, name the gap, propose alternatives. The conversation shapes future dispatches.
