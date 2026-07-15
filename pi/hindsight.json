@@ -3,10 +3,16 @@
     "baseUrl": "http://127.0.0.1:8888"
   },
   "banks": {
+    "project": {
+      "enabled": false
+    },
     "user": {
       "enabled": true,
       "bankId": "user"
     }
+  },
+  "userRetain": {
+    "mode": "router"
   },
   "recall": {
     "topK": 8,
