@@ -5,7 +5,7 @@ description: "The harness rework's WORKER seat, run manually: implements feature
 # parity with symmetric failure modes (evidence: scratch/sonnet-vs-opus-ab-report). Michael's
 # call ("try not using opus right now"). Opus remains available via explicit per-dispatch override.
 model: sonnet
-tools: [Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, SendMessage, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info]
+tools: [Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, SendMessage, mcp__obsidian-memory__read_note, mcp__obsidian-memory__search, mcp__obsidian-memory__get_note_info, mcp__obsidian-memory__outline]
 skills: [testing, bdd, docs]
 ---
 
