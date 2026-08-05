@@ -100,6 +100,24 @@ This is fine for fire-and-forget side work (kick off a build in the background w
 
 **Anti-pattern to avoid:** `job spawn { task review run --wait }`. The `--wait` flag already makes the command block until the cycle converges — backgrounding it inside `job spawn` loses both the synchronous return value AND any chance of a notification. Either run `task review run --wait` directly (blocks, returns verdict in exit code) or `task review run` + Monitor on the state file (parallel, notification on transition).
 
+## Persistent Session State (the nu MCP session)
+
+The `mcp__nu__evaluate` session is ONE long-lived nushell process: `let` bindings, `def` functions, and env vars all survive across evaluate calls (probe-verified 2026-08-05). Use this deliberately — context window holds pointers, values live outside the token budget:
+
+```nu
+# Name big payloads at fetch time — assign-and-suppress so the payload
+# never lands inline in your context:
+let tasks = (http get -H {X-Auth-User: me} http://localhost:4600/tasks); "saved"
+
+# Then query the variable for the rest of the session — no re-fetching:
+$tasks | where state == ready | select key title
+$tasks | group-by project | transpose project count
+```
+
+- `$history` is the automatic safety net, not the strategy: every evaluation's full result is captured (newest = index 99) whether or not you named it. Slice it after a surprise-huge result; prefer named variables for anything you planned to reuse.
+- All state (variables AND `$history`) dies with the MCP server process — a restart is a clean slate. Anything load-bearing across restarts goes to files or notes.
+- State is per-conversation: parked data doesn't transfer between sessions or seats.
+
 ## Common Gotchas
 
 - `job recv` does NOT take a job ID — it reads from the *current* job's mailbox only
