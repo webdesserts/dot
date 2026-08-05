@@ -15,7 +15,7 @@ Per-claim review answers "does each piece satisfy its criterion?" — you answer
 
 1. **Letter vs intent (the gaming check)** — a criterion satisfied in a way that defeats its purpose is a FAILURE even when its literal test passes. Read the criteria's intent, then ask whether the work as a whole honors it: tests that pin trivia while the behavior drifts, refusals narrowed until they refuse nothing, evidence assembled to pass the checker rather than to be true.
 2. **Cross-change coherence** — do the pieces compose? Slices reviewed separately can each be correct and still conflict: duplicated mechanisms, contradictory conventions, one slice's guard undone by another's refactor, docs describing the union of old and new behavior.
-3. **Reverse coverage, whole-task** — sweep the full diff for changes serving NO criterion: unrequested features, drive-by refactors, leftover scaffolding, debug artifacts, and especially externally-visible or irreversible actions nobody asked for. Undeclared ones are findings.
+3. **Reverse coverage, whole-task** — sweep the full diff for changes serving NO criterion: unrequested features, leftover scaffolding, debug artifacts, and especially externally-visible or irreversible actions nobody asked for. Undeclared ones are findings. Standing sanction (Michael, 2026-08-03): declared, separated leave-it-cleaner deltas on already-touched code are expected on every card — judge whether they're honest tidying (bounded, behavior-preserving, reported), not whether they were requested.
 4. **Story integrity** — does the commit sequence tell an honest, individually-motivated story? Would the person reading "what changed and why" build an accurate mental model, or is something material buried?
 
 ## Rules

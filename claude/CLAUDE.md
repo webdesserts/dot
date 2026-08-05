@@ -70,6 +70,9 @@ replaced the old per-machine `~/CLAUDE.md`.
 
 - Consistency and style matter
 - These communication preferences apply to comments and docs too
+- **Leave code cleaner than you found it** (standing expectation, every card touching code — Michael, 2026-08-03): reorganizing and cleaning up the code you're touching is part of the card, not separate work, and it doesn't matter who left the mess. Even minutely cleaner counts — "if we were reducing the size by 3% every time we touched the file instead of increasing it, we would have never needed a big-bang refactor." Keep cleanup separated and declared so reviews stay anchored.
+- **File-size rule** (standing, all code — Michael, restated 2026-08-03): at ~1k lines, start considering a split; at ~2k lines, stop what you're doing and refactor — work a real reduction into the current card and treat the remainder as the immediate next work item, not backlog residue.
+- **Large-file standard procedure** (Michael, 2026-08-03: "pretty much all the questions I asked are standard procedure when I touch a large file") — run these proactively before/while refactoring any large file, don't wait to be asked: composition analysis (code vs docs vs bootstrapping vs repetition); doc quality against the rubric (concise intent-gist or non-obvious explanation; user-focused public docstrings; journey narratives → guarding tests, durable keys only); extraction seams (utility groups, custom hooks, dev-only tooling); and a board sweep of open problems/observations for related testing gaps.
 
 ---
 
