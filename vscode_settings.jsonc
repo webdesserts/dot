@@ -82,4 +82,5 @@
   "claudeCode.disableLoginPrompt": true,
   "claudeCode.initialPermissionMode": "bypassPermissions",
   "docker.extension.enableComposeLanguageServer": false,
+  "prettier.requireConfig": true,
 }

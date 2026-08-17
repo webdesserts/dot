@@ -28,3 +28,7 @@
 	email = michael@webdesserts.com
 [init]
 	defaultBranch = main
+[push]
+	default = current
+[branch]
+	autoSetupMerge = simple
