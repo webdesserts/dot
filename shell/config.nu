@@ -9,17 +9,7 @@ use ~/scripts/prompts.nu
 # Foundry `pi` wrapper from the private work module. Inert without the rhea-gated
 # work.env value (PI_FOUNDRY_EXTENSION), so it's a plain passthrough off-rhea.
 # (nushell can't conditionally `use`; the wrapper self-gates instead.)
-#
-# DISABLED 2026-07-25 — `pi` is not defined anywhere in webdesserts-private, so
-# this import raised `export_not_found` and a parse error voids the WHOLE file:
-# every setting below became inert on umbra and charon, and `nu -l -c '...'`
-# (so `ssh umbra <cmd>`) exited 1 without running. The definition and the
-# PI_FOUNDRY_EXTENSION gate both live only in rhea's unsynced private repo.
-#
-# TO RESTORE: commit the `pi` definition (and its work.env gate) from rhea to
-# webdesserts-private, then uncomment the line below. It should then behave as
-# originally intended — real wrapper on rhea, passthrough everywhere else.
-# use ~/scripts/work.nu pi
+use ~/scripts/work.nu pi
 
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
