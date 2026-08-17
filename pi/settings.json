@@ -1,7 +1,7 @@
 {
-  "defaultProvider": "umans",
-  "defaultModel": "umans-glm-5.2",
-  "defaultThinkingLevel": "xhigh",
+  "defaultProvider": "foundry",
+  "defaultModel": "claude-opus-4-8",
+  "defaultThinkingLevel": "high",
   "packages": [
     "npm:pi-provider-umans",
     "npm:pi-mcp-adapter",
@@ -19,7 +19,7 @@
     "extensions/harness-context.ts",
     "extensions/subagent/index.ts"
   ],
-  "lastChangelogVersion": "0.80.3",
+  "lastChangelogVersion": "0.80.6",
   "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",
