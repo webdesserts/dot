@@ -106,9 +106,13 @@ def main [
 
   if $tools {
     let t = (tool-census $files $since_iso)
-    if $json { return ($t | to json) }
+    if $json { return ({all: $t, mcp_only: ($t | where { |r| $r.tool | str starts-with "mcp__" })} | to json) }
     print $"Tool census since ($since_iso | str substring 0..9) — estimated from tool input/result sizes \(chars/4\); results are the input tokens fed back \(then cached\), calls the output tokens spent"
-    print ($t | table); return
+    let mine = ($t | where { |r| $r.tool | str starts-with "mcp__" })
+    let mine_total = ($mine | get est_total_tokens_k | math sum)
+    let mine2 = ($mine | each { |r| $r | update share_pct (if $mine_total == 0 { 0 } else { ($r.est_total_tokens_k / $mine_total * 100) | math round --precision 1 }) })
+    print "All tools:"; print ($t | table)
+    print $"Your tools only \(mcp__*\), share within that set — (($mine_total / 1e3) | math round --precision 2) M est. tokens:"; print ($mine2 | table); return
   }
 
   # One row per assistant API message. rg pre-filters lines so nu only parses what matters.
