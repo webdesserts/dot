@@ -5,7 +5,8 @@
 # messages, de-duplicates by API request id (streamed content blocks repeat the same
 # usage), and reports per model → aggregated (plus per lane and per day):
 #   requests · total tokens · non-cache input · cache write · cache read · output ·
-#   cache-hit % (cache reads / all input) · estimated cost in USD.
+#   cache-hit % (cache reads / all input) · cache-miss % (non-cache in + cache writes / all input) ·
+#   estimated cost in USD; --tools gives per-tool call counts + estimated tokens through each tool.
 # Zero model tokens spent — plain files in, tables out.
 #
 # Usage:
@@ -44,10 +45,57 @@ def price-for [model: string] {
   if $hit == null { {row: $PRICES.default, known: false} } else { {row: ($PRICES | get $hit), known: true} }
 }
 
+
+# --tools: how often each tool is called and roughly how many tokens flow through it
+# (tool inputs are output tokens spent calling; tool results are input tokens fed back).
+# Transcripts carry no per-block token counts, so this uses chars/4 as the estimate.
+def tool-census [files: list<string>, since_iso: string] {
+  # 1) tool_use blocks (assistant side): id → name, input size
+  let uses = ($files | each { |f|
+    let raw = (do { rg --no-filename '"type":"tool_use"' $f } | complete | get stdout)
+    if ($raw | is-empty) { [] } else {
+      $raw | lines | each { |l|
+        let m = (try { $l | from json } catch { null })
+        if $m == null or ($m | get -o timestamp | default "") < $since_iso or ($m | get -o type) != "assistant" { [] } else {
+          ($m.message.content | default [] | where { |b| ($b | get -o type) == "tool_use" } | each { |b|
+            {id: ($b | get -o id), name: ($b | get -o name | default "?"), in_chars: (($b | get -o input | default {} | to json) | str length)}
+          })
+        }
+      } | flatten
+    }
+  } | flatten | uniq-by id)
+  let names = ($uses | reduce -f {} { |u, acc| $acc | insert $u.id $u.name })
+  # 2) tool_result blocks (user side): tool_use_id → result size
+  let results = ($files | each { |f|
+    let raw = (do { rg --no-filename '"type":"tool_result"' $f } | complete | get stdout)
+    if ($raw | is-empty) { [] } else {
+      $raw | lines | each { |l|
+        let m = (try { $l | from json } catch { null })
+        if $m == null or ($m | get -o timestamp | default "") < $since_iso { [] } else {
+          let content = ($m | get -o message.content | default [])
+          if ($content | describe) == "string" { [] } else {
+            $content | where { |b| ($b | get -o type) == "tool_result" } | each { |b|
+              {id: ($b | get -o tool_use_id), out_chars: (($b | get -o content | default "" | to json) | str length)}
+            }
+          }
+        }
+      } | flatten
+    }
+  } | flatten | uniq-by id)
+  let res_by_id = ($results | reduce -f {} { |r, acc| $acc | insert $r.id $r.out_chars })
+  let joined = ($uses | each { |u| {name: $u.name, in_chars: $u.in_chars, out_chars: ($res_by_id | get -o $u.id | default 0)} })
+  let total_chars = (($joined | get in_chars | math sum) + ($joined | get out_chars | math sum))
+  $joined | group-by name | transpose tool rows | each { |g|
+    let inc = ($g.rows | get in_chars | math sum); let outc = ($g.rows | get out_chars | math sum)
+    {tool: $g.tool, calls: ($g.rows | length), est_call_tokens_k: ($inc / 4 / 1e3 | math round --precision 1), est_result_tokens_k: ($outc / 4 / 1e3 | math round --precision 1), est_total_tokens_k: (($inc + $outc) / 4 / 1e3 | math round --precision 1), share_pct: (if $total_chars == 0 { 0 } else { (($inc + $outc) / $total_chars * 100) | math round --precision 1 }), avg_result_tokens: (if ($g.rows | length) == 0 { 0 } else { ($outc / 4 / ($g.rows | length)) | math round })}
+  } | sort-by est_total_tokens_k -r
+}
+
 def main [
   --since: string = ""    # ISO date (local); default = 7 days ago
   --json                  # print one record instead of tables
   --log                   # append a one-line summary to the census log
+  --tools                 # per-tool call counts + estimated tokens through each tool (chars/4)
 ] {
   let since_dt = (if $since == "" { (date now) - 7day } else { $since | into datetime })
   let since_iso = ($since_dt | date to-timezone utc | format date "%Y-%m-%dT%H:%M:%SZ")
@@ -55,6 +103,13 @@ def main [
 
   # Files touched since the cutoff (mtime is a cheap pre-filter; the timestamp filter below is the real one).
   let files = (glob $"($root)/**/*.jsonl" | where { |f| (ls $f | get 0.modified) > $since_dt })
+
+  if $tools {
+    let t = (tool-census $files $since_iso)
+    if $json { return ($t | to json) }
+    print $"Tool census since ($since_iso | str substring 0..9) — estimated from tool input/result sizes \(chars/4\); results are the input tokens fed back \(then cached\), calls the output tokens spent"
+    print ($t | table); return
+  }
 
   # One row per assistant API message. rg pre-filters lines so nu only parses what matters.
   let rows = (
@@ -109,6 +164,7 @@ def main [
         cache_read_M: ($cr / 1e6 | math round --precision 1),
         out_M: ($out / 1e6 | math round --precision 2),
         cache_hit_pct: (if $all_in == 0 { 0 } else { ($cr / $all_in * 100) | math round --precision 1 }),
+        cache_miss_pct: (if $all_in == 0 { 0 } else { (($input + $cw) / $all_in * 100) | math round --precision 1 }),
         est_cost_usd: ($t | get cost | math sum | math round --precision 2),
       }
   }
@@ -119,7 +175,7 @@ def main [
   let by_day = ($priced | insert day { |r| $r.ts | str substring 0..9 } | group-by day | transpose day rows | each { |g| {day: $g.day} | merge (do $sum $g.rows) } | sort-by day)
   let unknown_models = ($by_model | where price_known == false | get model)
 
-  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) · total ($totals.total_M) M · est $($totals.est_cost_usd) · cache-hit ($totals.cache_hit_pct)% · non-cache in ($totals.non_cache_in_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · out ($totals.out_M) M"
+  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) · total ($totals.total_M) M · est $($totals.est_cost_usd) · cache-hit ($totals.cache_hit_pct)% / miss ($totals.cache_miss_pct)% · non-cache in ($totals.non_cache_in_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · out ($totals.out_M) M"
 
   if $log {
     let dir = ("~/.claude/logs/token-census" | path expand)
