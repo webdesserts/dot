@@ -31,6 +31,14 @@ const PRICES = {
   "default":         {input: 3.0,  output: 15.0},
 }
 
+# Session directory → who runs there (umbra). Edit as lanes change.
+const LANE_LABELS = {
+  "webdesserts": "peri (agent-task lane)",
+  "ui": "iris (ui lane)",
+  "notes": "nightly notetaker",
+  "obsidian-memory": "obsidian-memory sessions",
+}
+
 def price-for [model: string] {
   let hit = ($PRICES | columns | where { |k| $k != "default" and ($model | str starts-with $k) } | first)
   if $hit == null { {row: $PRICES.default, known: false} } else { {row: ($PRICES | get $hit), known: true} }
@@ -65,7 +73,7 @@ def main [
                 rid: ($m | get -o requestId | default ($m | get -o message.id | default $m.uuid)),
                 ts: ($m | get -o timestamp | default ""),
                 model: ($m | get -o message.model | default "?"),
-                lane: (($m | get -o cwd | default "?") | path basename),
+                lane: (let b = (($m | get -o cwd | default "?") | path basename); $LANE_LABELS | get -o $b | default $b),
                 input: ($u | get -o input_tokens | default 0),
                 cw_5m: $cw_5m,
                 cw_1h: $cw_1h,
