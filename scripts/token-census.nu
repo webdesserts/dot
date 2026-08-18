@@ -156,12 +156,14 @@ def main [
     $r | insert cost $cost | insert price_known $p.known
   })
 
+  let window_5h = ((((date now) - $since_dt) / 1hr) / 5)
   let sum = { |t|
       let input = ($t | get input | math sum); let cw = (($t | get cw_5m | math sum) + ($t | get cw_1h | math sum))
       let cr = ($t | get cache_read | math sum); let out = ($t | get output | math sum)
       let all_in = ($input + $cw + $cr)
       {
         requests: ($t | length),
+        avg_req_per_5h: (if $window_5h <= 0 { 0 } else { (($t | length) / $window_5h) | math round --precision 1 }),
         total_M: (($all_in + $out) / 1e6 | math round --precision 1),
         non_cache_in_M: ($input / 1e6 | math round --precision 2),
         cache_write_M: ($cw / 1e6 | math round --precision 2),
@@ -179,7 +181,7 @@ def main [
   let by_day = ($priced | insert day { |r| $r.ts | str substring 0..9 } | group-by day | transpose day rows | each { |g| {day: $g.day} | merge (do $sum $g.rows) } | sort-by day)
   let unknown_models = ($by_model | where price_known == false | get model)
 
-  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) · total ($totals.total_M) M · est $($totals.est_cost_usd) · cache-hit ($totals.cache_hit_pct)% / miss ($totals.cache_miss_pct)% · non-cache in ($totals.non_cache_in_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · out ($totals.out_M) M"
+  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) \(($totals.avg_req_per_5h)/5h\) · total ($totals.total_M) M · est $($totals.est_cost_usd) · cache-hit ($totals.cache_hit_pct)% / miss ($totals.cache_miss_pct)% · non-cache in ($totals.non_cache_in_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · out ($totals.out_M) M"
 
   if $log {
     let dir = ("~/.claude/logs/token-census" | path expand)
