@@ -1,10 +1,12 @@
 #!/usr/bin/env nu
-# token-census.nu — Claude Code token usage from the local transcripts on this machine.
+# token-census.nu — Claude Code token usage (and estimated cost) from the local transcripts.
 #
 # Reads every ~/.claude/projects/**/*.jsonl modified since --since, keeps assistant
 # messages, de-duplicates by API request id (streamed content blocks repeat the same
-# usage), and sums input / cache-write / cache-read / output tokens per model, per lane
-# (session cwd), and per day. Zero model tokens spent — plain files in, a table out.
+# usage), and reports per model → aggregated (plus per lane and per day):
+#   requests · total tokens · non-cache input · cache write · cache read · output ·
+#   cache-hit % (cache reads / all input) · estimated cost in USD.
+# Zero model tokens spent — plain files in, tables out.
 #
 # Usage:
 #   token-census.nu                      # last 7 days
@@ -15,6 +17,24 @@
 #
 # Only sessions on THIS machine are counted (laptop sessions are not here), and the
 # local model (llama-swap / Umbra) costs no Anthropic tokens, so it never appears.
+
+# List prices, USD per million tokens (Anthropic, Aug 2026). Cache reads = 10% of input;
+# cache writes = 1.25× input (5-minute) or 2× input (1-hour). Unknown models fall back to
+# the `default` row and are flagged in the output. Edit here when prices move.
+const PRICES = {
+  "claude-fable-5":  {input: 10.0, output: 50.0},
+  "claude-opus-5":   {input: 5.0,  output: 25.0},
+  "claude-sonnet-5": {input: 2.0,  output: 10.0},
+  "claude-haiku-4-5": {input: 1.0, output: 5.0},
+  "claude-opus-4":   {input: 15.0, output: 75.0},
+  "claude-sonnet-4": {input: 3.0,  output: 15.0},
+  "default":         {input: 3.0,  output: 15.0},
+}
+
+def price-for [model: string] {
+  let hit = ($PRICES | columns | where { |k| $k != "default" and ($model | str starts-with $k) } | first)
+  if $hit == null { {row: $PRICES.default, known: false} } else { {row: ($PRICES | get $hit), known: true} }
+}
 
 def main [
   --since: string = ""    # ISO date (local); default = 7 days ago
@@ -38,13 +58,17 @@ def main [
             let m = (try { $l | from json } catch { null })
             if $m == null or ($m | get -o message.usage) == null { null } else {
               let u = $m.message.usage
+              let cw_total = ($u | get -o cache_creation_input_tokens | default 0)
+              let cw_1h = ($u | get -o cache_creation.ephemeral_1h_input_tokens | default 0)
+              let cw_5m = ($u | get -o cache_creation.ephemeral_5m_input_tokens | default ($cw_total - $cw_1h))
               {
                 rid: ($m | get -o requestId | default ($m | get -o message.id | default $m.uuid)),
                 ts: ($m | get -o timestamp | default ""),
                 model: ($m | get -o message.model | default "?"),
                 lane: (($m | get -o cwd | default "?") | path basename),
                 input: ($u | get -o input_tokens | default 0),
-                cache_write: ($u | get -o cache_creation_input_tokens | default 0),
+                cw_5m: $cw_5m,
+                cw_1h: $cw_1h,
                 cache_read: ($u | get -o cache_read_input_tokens | default 0),
                 output: ($u | get -o output_tokens | default 0),
               }
@@ -57,35 +81,54 @@ def main [
     | uniq-by rid
   )
 
-  let sum = { |t| {
-      requests: ($t | length),
-      input_M: (($t | get input | math sum) / 1e6 | math round --precision 2),
-      cache_write_M: (($t | get cache_write | math sum) / 1e6 | math round --precision 2),
-      cache_read_M: (($t | get cache_read | math sum) / 1e6 | math round --precision 1),
-      output_M: (($t | get output | math sum) / 1e6 | math round --precision 2),
-  } }
+  # Cost per row from its own model's price row.
+  let priced = ($rows | each { |r|
+    let p = (price-for $r.model)
+    let per_m = $p.row
+    let cost = (($r.input * $per_m.input) + ($r.cw_5m * $per_m.input * 1.25) + ($r.cw_1h * $per_m.input * 2.0) + ($r.cache_read * $per_m.input * 0.10) + ($r.output * $per_m.output)) / 1e6
+    $r | insert cost $cost | insert price_known $p.known
+  })
 
-  let totals = (do $sum $rows)
-  let by_model = ($rows | group-by model | transpose model rows | each { |g| {model: $g.model} | merge (do $sum $g.rows) } | sort-by output_M -r)
-  let by_lane = ($rows | group-by lane | transpose lane rows | each { |g| {lane: $g.lane} | merge (do $sum $g.rows) } | sort-by output_M -r)
-  let by_day = ($rows | insert day { |r| $r.ts | str substring 0..9 } | group-by day | transpose day rows | each { |g| {day: $g.day} | merge (do $sum $g.rows) } | sort-by day)
+  let sum = { |t|
+      let input = ($t | get input | math sum); let cw = (($t | get cw_5m | math sum) + ($t | get cw_1h | math sum))
+      let cr = ($t | get cache_read | math sum); let out = ($t | get output | math sum)
+      let all_in = ($input + $cw + $cr)
+      {
+        requests: ($t | length),
+        total_M: (($all_in + $out) / 1e6 | math round --precision 1),
+        non_cache_in_M: ($input / 1e6 | math round --precision 2),
+        cache_write_M: ($cw / 1e6 | math round --precision 2),
+        cache_read_M: ($cr / 1e6 | math round --precision 1),
+        out_M: ($out / 1e6 | math round --precision 2),
+        cache_hit_pct: (if $all_in == 0 { 0 } else { ($cr / $all_in * 100) | math round --precision 1 }),
+        est_cost_usd: ($t | get cost | math sum | math round --precision 2),
+      }
+  }
 
-  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) · output ($totals.output_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · input ($totals.input_M) M"
+  let totals = (do $sum $priced)
+  let by_model = ($priced | group-by model | transpose model rows | each { |g| {model: $g.model, price_known: ($g.rows | get price_known | all { |b| $b })} | merge (do $sum $g.rows) } | sort-by est_cost_usd -r)
+  let by_lane = ($priced | group-by lane | transpose lane rows | each { |g| {lane: $g.lane} | merge (do $sum $g.rows) } | sort-by est_cost_usd -r)
+  let by_day = ($priced | insert day { |r| $r.ts | str substring 0..9 } | group-by day | transpose day rows | each { |g| {day: $g.day} | merge (do $sum $g.rows) } | sort-by day)
+  let unknown_models = ($by_model | where price_known == false | get model)
+
+  let summary_line = $"($since_iso | str substring 0..9)..(date now | format date '%Y-%m-%d') · requests ($totals.requests) · total ($totals.total_M) M · est $($totals.est_cost_usd) · cache-hit ($totals.cache_hit_pct)% · non-cache in ($totals.non_cache_in_M) M · cache-write ($totals.cache_write_M) M · cache-read ($totals.cache_read_M) M · out ($totals.out_M) M"
 
   if $log {
     let dir = ("~/.claude/logs/token-census" | path expand)
     mkdir $dir
     $"(date now | format date '%Y-%m-%dT%H:%M:%S%z') ($summary_line)\n" | save --append $"($dir)/census.log"
-    {generated: (date now | format date "%Y-%m-%dT%H:%M:%S%z"), since: $since_iso, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day} | to json | save -f $"($dir)/latest.json"
+    {generated: (date now | format date "%Y-%m-%dT%H:%M:%S%z"), since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, unknown_price_models: $unknown_models} | to json | save -f $"($dir)/latest.json"
   }
 
   if $json {
-    {since: $since_iso, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day} | to json
+    {since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, unknown_price_models: $unknown_models} | to json
   } else {
     print $"Token census — ($summary_line)"
-    print "(cache-read is the cheap tier; output + cache-write are what the limits count)"
+    print "(cache-read is billed at 10% of input; cache-write at 1.25× (5-min) / 2× (1-hour) input; costs are list-price estimates from the table at the top of the script)"
+    if ($unknown_models | length) > 0 { print $"⚠ no price row for: ($unknown_models | str join ', ') — priced at the default row" }
     print ""
-    print "By model:"; print ($by_model | table)
+    print "By model:"; print ($by_model | reject price_known | table)
+    print "Aggregate:"; print ([$totals] | table)
     print "By lane (session directory):"; print ($by_lane | table)
     print "By day (UTC):"; print ($by_day | table)
   }
