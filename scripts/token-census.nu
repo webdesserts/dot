@@ -40,6 +40,11 @@ const LANE_LABELS = {
   "obsidian-memory": "obsidian-memory sessions",
 }
 
+# launchd gives a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) in which rg
+# (and any other homebrew binary) does not resolve. Prepend so external
+# commands work under both interactive and scheduled runs.
+$env.PATH = ["/opt/homebrew/bin", ...$env.PATH] | uniq
+
 def price-for [model: string] {
   let hit = ($PRICES | columns | where { |k| $k != "default" and ($model | str starts-with $k) } | first)
   if $hit == null { {row: $PRICES.default, known: false} } else { {row: ($PRICES | get $hit), known: true} }
@@ -102,7 +107,8 @@ def main [
   let root = ("~/.claude/projects" | path expand)
 
   # Files touched since the cutoff (mtime is a cheap pre-filter; the timestamp filter below is the real one).
-  let files = (glob $"($root)/**/*.jsonl" | where { |f| (ls $f | get 0.modified) > $since_dt })
+  let files = (glob $"($root)/**/*.jsonl")
+  # (mtime pre-filter dropped: per-line timestamp filter below is the real one)
 
   if $tools {
     let t = (tool-census $files $since_iso)
@@ -173,6 +179,11 @@ def main [
         cache_miss_pct: (if $all_in == 0 { 0 } else { (($input + $cw) / $all_in * 100) | math round --precision 1 }),
         est_cost_usd: ($t | get cost | math sum | math round --precision 2),
       }
+  }
+
+  if ($priced | length) == 0 {
+    print $"No assistant requests in window ($since_iso) to ((date now | format date '%Y-%m-%d')) — nothing to count."
+    return
   }
 
   let totals = (do $sum $priced)
