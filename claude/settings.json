@@ -21,6 +21,7 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
+  "autoCompactWindow": 600000,
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "theme": "light",
