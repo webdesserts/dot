@@ -10,8 +10,8 @@
 # reads as bare, gets refused while the agent is busy ("Agent is already
 # processing"), and the nudge/warning is silently dropped.
 
-const PATCH = path self parent-path "pi-subagents-nudge-steer.patch"
-const TARGET = $"($env.HOME)/.pi/agent/npm/node_modules/pi-subagents/src/runs/shared/subagent-prompt-runtime.ts"
+let PATCH = ($env.CURRENT_FILE | path dirname | path join "pi-subagents-nudge-steer.patch")
+let TARGET = $"($env.HOME)/.pi/agent/npm/node_modules/pi-subagents/src/runs/shared/subagent-prompt-runtime.ts"
 
 def main [] {
 	if not ($TARGET | path exists) {
