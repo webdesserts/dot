@@ -24,7 +24,11 @@
  *
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
  * AUTONOMY_ACTOR (default "iris" — per-session identity is a TODO when two
- * guests share a machine), AUTONOMY_WAKE_COOLDOWN_MS (default 30000).
+ * guests share a machine), AUTONOMY_WAKE_COOLDOWN_MS (default 30000),
+ * AUTONOMY_HEARTBEAT_MS (default 300000 — 5-minute self-wake so the agent
+ * re-checks queue status and plans next steps even with no feed traffic;
+ * 0 disables). Michael's ruling 2026-09-04: the heartbeat keeps overnight
+ * autonomous work on the rails.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -34,6 +38,7 @@ const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
 const POLL_HOLD_SECONDS = 20;
 const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
 const ERROR_BACKOFF_MS = 5_000;
+const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 300_000);
 
 interface NotificationItem {
 	place?: string;
@@ -90,6 +95,29 @@ export default function (pi: ExtensionAPI) {
 		void (async () => {
 			let lastWake = 0;
 			let backlog: string[] = [];
+
+			// Heartbeat: periodic self-wake. sendUserMessage starts a turn when
+			// idle; while streaming it queues as followUp, so a tick never
+			// interrupts work in flight — it only guarantees the agent revisits
+			// queue status at least every HEARTBEAT_MS.
+			if (HEARTBEAT_MS > 0) {
+				const heartbeat = setInterval(() => {
+					if (!running) {
+						clearInterval(heartbeat);
+						return;
+					}
+					const message =
+						"[heartbeat] 5-minute check: run queue-watch, compare against the overnight plan, " +
+						"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
+						"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.";
+					try {
+						pi.sendUserMessage(message);
+					} catch {
+						pi.sendUserMessage(message, { deliverAs: "followUp" });
+					}
+				}, HEARTBEAT_MS);
+			}
+
 			while (running) {
 				try {
 					const res = await fetch(`${BASE}/notifications?timeout=${POLL_HOLD_SECONDS}`, {
