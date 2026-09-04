@@ -2,7 +2,7 @@
 name: worker
 description: Implements features using TDD against explicit criteria. Executes implementation plans produced by the Planner. Works on the current branch. (Formerly named "coder".)
 tools: read, write, edit, bash, grep, find, ls, mcp
-model: opencode-go/kimi-k2.7-code
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Worker — Implementer
