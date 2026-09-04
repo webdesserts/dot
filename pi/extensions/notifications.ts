@@ -23,18 +23,28 @@
  * ⇒ do not poll.
  *
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
- * AUTONOMY_ACTOR (default "iris" — per-session identity is a TODO when two
- * guests share a machine), AUTONOMY_WAKE_COOLDOWN_MS (default 30000),
+ * AUTONOMY_ACTOR (default "iris" — set per machine: rhea sets "rhea"),
+ * AUTONOMY_WAKE_COOLDOWN_MS (default 30000),
  * AUTONOMY_HEARTBEAT_MS (default 300000 — 5-minute self-wake so the agent
  * re-checks queue status and plans next steps even with no feed traffic;
- * 0 disables). Michael's ruling 2026-09-04: the heartbeat keeps overnight
- * autonomous work on the rails.
+ * 0 disables),
+ * AUTONOMY_TOKEN (optional — when set, an `Authorization: Bearer <token>`
+ * header rides every request alongside `X-Auth-User`, for machines whose
+ * daemon sits behind an authenticating proxy (rhea: corporate key via the
+ * t:227 exchange; Caddy validates the bearer and resolves the actor).
+ *
+ * WAKE DISCIPLINE (Michael's efficiency ruling): the bridge wakes only
+ * when notification STATE changes — a state signature (priority handles +
+ * summary places + total) is compared against the last wake, and an
+ * unchanged signature never wakes, no matter how many polls pass. A
+ * constant total:10 is silence, not spam.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
 const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
+const TOKEN = process.env.AUTONOMY_TOKEN ?? "";
 const POLL_HOLD_SECONDS = 20;
 const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
 const ERROR_BACKOFF_MS = 5_000;
@@ -57,6 +67,23 @@ interface LongPollResponse {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function authHeaders(): Record<string, string> {
+	const headers: Record<string, string> = { "X-Auth-User": ACTOR };
+	if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+	return headers;
+}
+
+function stateSignature(data: LongPollResponse, priority: NotificationItem[]): string {
+	// The wake-diff signature: priority handles + summary places/counts +
+	// total. Own-echo rows are filtered out BEFORE this is computed, so our
+	// own posts never count as state changes.
+	const handles = priority.map((i) => i.handle ?? i.resource_key ?? i.text ?? "").sort();
+	const summary = Object.entries(data.summary ?? {})
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([place, count]) => `${place}:${count}`);
+	return JSON.stringify({ h: handles, s: summary, t: data.total ?? 0 });
+}
 
 function renderItem(item: NotificationItem, tier: string): string {
 	const place = item.place ? ` @ ${item.place}` : "";
@@ -102,6 +129,7 @@ export default function (pi: ExtensionAPI) {
 		void (async () => {
 			let lastWake = 0;
 			let backlog: string[] = [];
+			let lastSig: string | null = null;
 
 			// Heartbeat: periodic self-wake. sendUserMessage starts a turn when
 			// idle; while streaming it queues as followUp, so a tick never
@@ -128,7 +156,7 @@ export default function (pi: ExtensionAPI) {
 			while (running) {
 				try {
 					const res = await fetch(`${BASE}/notifications?timeout=${POLL_HOLD_SECONDS}`, {
-						headers: { "X-Auth-User": ACTOR },
+						headers: authHeaders(),
 						signal: controller.signal,
 					});
 					if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -144,6 +172,13 @@ export default function (pi: ExtensionAPI) {
 					const trivial = priority.length === 0 && Object.keys(summary).length === 0
 						&& (data.total === undefined || data.total === 0);
 					if (trivial) continue;
+
+					// Wake discipline: only state CHANGES wake. A signature identical
+					// to the last wake (same handles, same summary, same total) is
+					// silence — persistent items re-offering is not news.
+					const sig = stateSignature(data, priority);
+					if (sig === lastSig) continue;
+					lastSig = sig;
 
 					const now = Date.now();
 					if (now - lastWake < WAKE_COOLDOWN_MS) {
