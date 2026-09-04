@@ -2,7 +2,7 @@
 name: architect
 description: Holistic codebase reviewer. Researches libraries, identifies tech debt, and suggests long-term improvements. Writes findings to notes.
 tools: read, grep, find, ls, bash, mcp
-model: opencode-go/kimi-k2.7-code
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Architect — Holistic Reviewer

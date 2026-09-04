@@ -2,7 +2,7 @@
 name: notetaker
 description: Manages notes and memory. Deep searches, reorganization, consolidation of knowledge base. Understands note taxonomy and proactively consolidates.
 tools: read, grep, find, ls, mcp
-model: umbra/qwen3.6-27b
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Notetaker — Memory Manager
