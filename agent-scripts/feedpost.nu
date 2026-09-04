@@ -70,7 +70,7 @@ export def feed-post [
   # always knows the resulting handle, so dismiss it immediately. Without this,
   # every own post re-offers on every poll and wakes the agent (2026-09-04).
   let echo_handle = $"feed-post-($resp.hash)"
-  do -i { http post -t application/json -H ["X-Auth-User" $author] $"($base)/notifications/dismiss" {handle: $echo_handle} } | ignore
+  do -i { http post -t application/json -H ["X-Auth-User" $author] $"($base)/notifications/dismiss" {handles: [$echo_handle]} } | ignore
   # surface the server's own verdict, which is the ground truth
   {hash: $resp.hash, resolved: ($resp.references | get -i key), unresolved: ($resp.unresolved | get -i text)}
 }
