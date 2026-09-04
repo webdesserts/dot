@@ -1,0 +1,136 @@
+/**
+ * notifications — poll the autonomy daemon's notification long-poll and wake the
+ * agent when items arrive.
+ *
+ * WHY: pi has no self-wake primitive. The Claude-harness Monitor tasks could
+ * message the orchestrator and force a turn; pi tools are synchronous and jobs
+ * are poll-only. The daemon's notification system IS the machine's wake path —
+ * it owns deduplication and noise reduction (Michael's design: subscribed posts
+ * arrive LOW, mentions/replies always HIGH) — so this extension is a thin
+ * cadence-poller, not logic. Every notification wakes, including our own posts;
+ * the server filters.
+ *
+ * MECHANICS: `GET /notifications?timeout=S` (X-Auth-User header) holds up to S
+ * seconds and answers as soon as anything undelivered arrives for the actor:
+ * `{high: [{place, sender, text, resource_key, handle}], low: {summary, items},
+ * retracted}`. Items are delivered ONCE per fetch (cursor is server-side);
+ * `/notifications/list` is the durable view. On wake we `pi.sendUserMessage`,
+ * which starts a turn when idle and queues as followUp while streaming.
+ *
+ * SUBAGENTS MUST NOT RUN THIS: a seat polling the actor's queue consumes the
+ * actor's batch. Detection matches harness-context.ts: subagents are spawned
+ * with --append-system-prompt, so `systemPromptOptions.appendSystemPrompt` set
+ * ⇒ do not poll.
+ *
+ * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
+ * AUTONOMY_ACTOR (default "iris" — per-session identity is a TODO when two
+ * guests share a machine), AUTONOMY_WAKE_COOLDOWN_MS (default 30000).
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
+const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
+const POLL_HOLD_SECONDS = 20;
+const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
+const ERROR_BACKOFF_MS = 5_000;
+
+interface NotificationItem {
+	place?: string;
+	sender?: string;
+	text?: string;
+	resource_key?: string;
+}
+
+interface LongPollResponse {
+	high?: NotificationItem[];
+	low?: { summary?: string; items?: NotificationItem[] };
+	retracted?: number;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function renderItem(item: NotificationItem, tier: string): string {
+	const place = item.place ? ` @ ${item.place}` : "";
+	const key = item.resource_key ? ` (${item.resource_key})` : "";
+	return `- [${tier}] ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
+}
+
+function render(data: LongPollResponse): string {
+	const lines: string[] = [];
+	for (const item of data.high ?? []) lines.push(renderItem(item, "HIGH"));
+	const lowItems = data.low?.items ?? [];
+	for (const item of lowItems) lines.push(renderItem(item, "low"));
+	if (data.low?.summary) lines.push(`low summary: ${data.low.summary}`);
+	if (data.retracted) lines.push(`retracted: ${data.retracted}`);
+	if (lines.length === 0) {
+		// Shape changed under us (expected — the endpoint is being reworked).
+		// Wake anyway with a raw dump so the agent can adapt at source.
+		return `autonomy notifications: response shape not recognized — inspecting raw:\n${JSON.stringify(data).slice(0, 2000)}`;
+	}
+	const head = `autonomy notifications (${data.high?.length ?? 0} high, ${lowItems.length} low):`;
+	return `${head}\n${lines.join("\n")}\n(durable list: GET ${BASE}/notifications/list with X-Auth-User)`;
+}
+
+export default function (pi: ExtensionAPI) {
+	let running = false;
+
+	pi.on("session_start", async (event) => {
+		// Match harness-context.ts: subagents are spawned with --append-system-prompt.
+		const isSubagent = Boolean(event.systemPromptOptions?.appendSystemPrompt);
+		if (isSubagent || running) return;
+		running = true;
+
+		const controller = new AbortController();
+		pi.on("session_shutdown", async () => {
+			running = false;
+			controller.abort();
+		});
+
+		void (async () => {
+			let lastWake = 0;
+			let backlog: string[] = [];
+			while (running) {
+				try {
+					const res = await fetch(`${BASE}/notifications?timeout=${POLL_HOLD_SECONDS}`, {
+						headers: { "X-Auth-User": ACTOR },
+						signal: controller.signal,
+					});
+					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					const data = (await res.json()) as LongPollResponse;
+					const high = data.high ?? [];
+					const low = data.low?.items ?? [];
+					const trivial = high.length === 0 && low.length === 0 && !data.retracted
+						&& Object.keys(data).every((k) => ["high", "low", "retracted"].includes(k));
+					if (trivial) continue;
+
+					const now = Date.now();
+					if (now - lastWake < WAKE_COOLDOWN_MS) {
+						// Cooldown: buffer the lines so nothing rendered is lost — the
+						// next wake carries them. (The durable list holds regardless.)
+						for (const item of high) backlog.push(renderItem(item, "HIGH"));
+						for (const item of low) backlog.push(renderItem(item, "low"));
+						continue;
+					}
+					lastWake = now;
+					const buffered = backlog.splice(0);
+					const message =
+						buffered.length > 0
+							? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
+							: render(data);
+					try {
+						pi.sendUserMessage(message);
+					} catch {
+						// streaming right now — docs require an explicit delivery mode
+						pi.sendUserMessage(message, { deliverAs: "followUp" });
+					}
+				} catch (err) {
+					if (controller.signal.aborted) break;
+					// Daemon down or transient — back off and keep the loop alive.
+					console.error(`[notifications] poll failed: ${err}; retrying in ${ERROR_BACKOFF_MS}ms`);
+					await sleep(ERROR_BACKOFF_MS);
+				}
+			}
+		})();
+	});
+}

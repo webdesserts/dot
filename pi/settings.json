@@ -16,7 +16,8 @@
   ],
   "extensions": [
     "extensions/harness-context.ts",
-    "extensions/subagent/index.ts"
+    "extensions/subagent/index.ts",
+    "extensions/notifications.ts"
   ],
   "lastChangelogVersion": "0.84.4",
   "theme": "neapolitan-light",
