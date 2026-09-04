@@ -120,7 +120,7 @@ export default function (pi: ExtensionAPI) {
 					try {
 						pi.sendUserMessage(message);
 					} catch {
-						pi.sendUserMessage(message, { deliverAs: "followUp" });
+						pi.sendUserMessage(message, { streamingBehavior: "followUp" });
 					}
 				}, HEARTBEAT_MS);
 			}
@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI) {
 						pi.sendUserMessage(message);
 					} catch {
 						// streaming right now — docs require an explicit delivery mode
-						pi.sendUserMessage(message, { deliverAs: "followUp" });
+						pi.sendUserMessage(message, { streamingBehavior: "followUp" });
 					}
 				} catch (err) {
 					if (controller.signal.aborted) break;
