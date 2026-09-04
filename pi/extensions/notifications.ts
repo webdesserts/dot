@@ -76,13 +76,15 @@ function authHeaders(): Record<string, string> {
 
 function stateSignature(data: LongPollResponse, priority: NotificationItem[]): string {
 	// The wake-diff signature: priority handles + summary places/counts +
-	// total. Own-echo rows are filtered out BEFORE this is computed, so our
-	// own posts never count as state changes.
+	// the VISIBLE total (own-echo rows are filtered out BEFORE this is
+	// computed, so our own posts never count as state changes — Michael's
+	// ruling: own posts should not alert, at all, including as total drift).
 	const handles = priority.map((i) => i.handle ?? i.resource_key ?? i.text ?? "").sort();
 	const summary = Object.entries(data.summary ?? {})
 		.sort(([a], [b]) => a.localeCompare(b))
 		.map(([place, count]) => `${place}:${count}`);
-	return JSON.stringify({ h: handles, s: summary, t: data.total ?? 0 });
+	const visibleTotal = priority.length + Object.values(data.summary ?? {}).reduce((a, b) => a + b, 0);
+	return JSON.stringify({ h: handles, s: summary, t: visibleTotal });
 }
 
 function renderItem(item: NotificationItem, tier: string): string {
