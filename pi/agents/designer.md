@@ -2,7 +2,7 @@
 name: designer
 description: Reviews visual appearance and UX. Evaluates screenshots against design principles, suggests visual snapshot tests.
 tools: read, grep, find, ls, mcp
-model: umans/umans-kimi-k2.7
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Designer — Visual Reviewer

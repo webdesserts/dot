@@ -1,9 +1,8 @@
 {
-  "defaultProvider": "foundry",
-  "defaultModel": "claude-opus-4-8",
+  "defaultProvider": "fireworks",
+  "defaultModel": "accounts/fireworks/models/glm-5p3-flash",
   "defaultThinkingLevel": "high",
   "packages": [
-    "npm:pi-provider-umans",
     "npm:pi-mcp-adapter",
     "npm:@luxusai/pi-hindsight"
   ],
@@ -19,7 +18,7 @@
     "extensions/harness-context.ts",
     "extensions/subagent/index.ts"
   ],
-  "lastChangelogVersion": "0.80.6",
+  "lastChangelogVersion": "0.84.4",
   "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",

@@ -2,7 +2,7 @@
 name: planner
 description: Creates detailed implementation plans for features. Identifies files to modify, patterns to follow, and produces step-by-step instructions for Workers.
 tools: read, grep, find, ls, bash, mcp
-model: umans/umans-glm-5.2:high
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Planner — Implementation Planner

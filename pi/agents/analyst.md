@@ -2,7 +2,7 @@
 name: analyst
 description: Generates specs from user demands and adversarially reviews them. Produces structured requirements and surfaces open questions about edge cases.
 tools: read, grep, find, ls, bash, mcp
-model: umans/umans-glm-5.2:high
+model: fireworks/accounts/fireworks/models/glm-5p3-flash
 ---
 
 # Analyst — Spec Generator & Adversary
