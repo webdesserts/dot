@@ -56,10 +56,10 @@ function renderItem(item: NotificationItem, tier: string): string {
 	return `- [${tier}] ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
 }
 
-function render(data: LongPollResponse): string {
+function render(data: LongPollResponse, high: NotificationItem[], low: NotificationItem[]): string {
 	const lines: string[] = [];
-	for (const item of data.high ?? []) lines.push(renderItem(item, "HIGH"));
-	const lowItems = data.low?.items ?? [];
+	for (const item of high) lines.push(renderItem(item, "HIGH"));
+	const lowItems = low;
 	for (const item of lowItems) lines.push(renderItem(item, "low"));
 	if (data.low?.summary) lines.push(`low summary: ${data.low.summary}`);
 	if (data.retracted) lines.push(`retracted: ${data.retracted}`);
@@ -68,7 +68,7 @@ function render(data: LongPollResponse): string {
 		// Wake anyway with a raw dump so the agent can adapt at source.
 		return `autonomy notifications: response shape not recognized — inspecting raw:\n${JSON.stringify(data).slice(0, 2000)}`;
 	}
-	const head = `autonomy notifications (${data.high?.length ?? 0} high, ${lowItems.length} low):`;
+	const head = `autonomy notifications (${high.length} high, ${lowItems.length} low):`;
 	return `${head}\n${lines.join("\n")}\n(durable list: GET ${BASE}/notifications/list with X-Auth-User)`;
 }
 
@@ -98,8 +98,12 @@ export default function (pi: ExtensionAPI) {
 					});
 					if (!res.ok) throw new Error(`HTTP ${res.status}`);
 					const data = (await res.json()) as LongPollResponse;
-					const high = data.high ?? [];
-					const low = data.low?.items ?? [];
+					const high = (data.high ?? []).filter((n) => n.sender !== ACTOR);
+					const low = (data.low?.items ?? []).filter((n) => n.sender !== ACTOR);
+					// Own-echo rows are consumed (delivery cursor advances) but never
+					// wake — Michael's ruling: own posts should not alert. The service
+					// store has no sender exclusion at write (verified at source), so
+					// the filter lives here until it moves server-side.
 					const trivial = high.length === 0 && low.length === 0 && !data.retracted
 						&& Object.keys(data).every((k) => ["high", "low", "retracted"].includes(k));
 					if (trivial) continue;
@@ -117,7 +121,7 @@ export default function (pi: ExtensionAPI) {
 					const message =
 						buffered.length > 0
 							? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
-							: render(data);
+							: render(data, high, low);
 					try {
 						pi.sendUserMessage(message);
 					} catch {
