@@ -4,7 +4,8 @@
   "defaultThinkingLevel": "high",
   "packages": [
     "npm:pi-mcp-adapter",
-    "npm:@luxusai/pi-hindsight"
+    "npm:@luxusai/pi-hindsight",
+    "npm:pi-subagents"
   ],
   "compaction": {
     "enabled": true,
@@ -16,7 +17,6 @@
   ],
   "extensions": [
     "extensions/harness-context.ts",
-    "extensions/subagent/index.ts",
     "extensions/notifications.ts"
   ],
   "lastChangelogVersion": "0.84.4",

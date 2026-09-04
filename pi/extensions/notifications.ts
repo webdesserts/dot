@@ -150,11 +150,10 @@ export default function (pi: ExtensionAPI) {
 						"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
 						"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
 						"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.";
-					try {
-						pi.sendUserMessage(message);
-					} catch {
-						pi.sendUserMessage(message, { streamingBehavior: "followUp" });
-					}
+					// followUp: queued if the agent is mid-turn, immediate if idle.
+					// NEVER send bare — when busy the runtime does not throw, it
+					// logs "Agent is already processing" and DROPS the message.
+					pi.sendUserMessage(message, { streamingBehavior: "followUp" });
 				}, HEARTBEAT_MS);
 			};
 			pi.on("agent_start", async () => {
@@ -209,12 +208,10 @@ export default function (pi: ExtensionAPI) {
 						buffered.length > 0
 							? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
 							: render(data, priority, summary);
-					try {
-						pi.sendUserMessage(message);
-					} catch {
-						// streaming right now — docs require an explicit delivery mode
-						pi.sendUserMessage(message, { streamingBehavior: "followUp" });
-					}
+					// followUp: queued if the agent is mid-turn, immediate if idle.
+					// NEVER send bare — when busy the runtime does not throw, it
+					// logs "Agent is already processing" and DROPS the message.
+					pi.sendUserMessage(message, { streamingBehavior: "followUp" });
 				} catch (err) {
 					if (controller.signal.aborted) break;
 					// Daemon down or transient — back off and keep the loop alive.
