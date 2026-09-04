@@ -29,12 +29,15 @@
  */
 
 import { spawn } from "node:child_process";
-import { watch } from "node:fs";
+import { watch, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+// realpathSync: ~/.pi/agent/extensions/notifications.ts is a SYMLINK into
+// dots — import.meta.url resolves to the symlink path, but the worker lives
+// next to the real file. Resolve first or the spawn can't find it.
 const WORKER_PATH = path.join(
-	path.dirname(fileURLToPath(import.meta.url)),
+	path.dirname(realpathSync(fileURLToPath(import.meta.url))),
 	"notifications.worker.mjs",
 );
 const RESPAWN_DELAY_MS = 2_000;
