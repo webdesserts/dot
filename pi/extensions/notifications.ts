@@ -25,8 +25,8 @@
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
  * AUTONOMY_ACTOR (default "iris" — set per machine: rhea sets "rhea"),
  * AUTONOMY_WAKE_COOLDOWN_MS (default 30000),
- * AUTONOMY_HEARTBEAT_MS (default 300000 — 5-minute self-wake so the agent
- * re-checks queue status and plans next steps even with no feed traffic;
+ * AUTONOMY_HEARTBEAT_MS (default 1800000 — fires after 30 minutes of
+ * genuine inactivity, re-armed at every turn end, cleared on any activity;
  * 0 disables),
  * AUTONOMY_TOKEN (optional — when set, an `Authorization: Bearer <token>`
  * header rides every request alongside `X-Auth-User`, for machines whose
@@ -48,7 +48,7 @@ const TOKEN = process.env.AUTONOMY_TOKEN ?? "";
 const POLL_HOLD_SECONDS = 20;
 const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
 const ERROR_BACKOFF_MS = 5_000;
-const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 300_000);
+const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
 
 interface NotificationItem {
 	place?: string;
@@ -133,18 +133,21 @@ export default function (pi: ExtensionAPI) {
 			let backlog: string[] = [];
 			let lastSig: string | null = null;
 
-			// Heartbeat: periodic self-wake. sendUserMessage starts a turn when
-			// idle; while streaming it queues as followUp, so a tick never
-			// interrupts work in flight — it only guarantees the agent revisits
-			// queue status at least every HEARTBEAT_MS.
-			if (HEARTBEAT_MS > 0) {
-				const heartbeat = setInterval(() => {
-					if (!running) {
-						clearInterval(heartbeat);
-						return;
-					}
+			// Heartbeat: IDLE-timeout self-wake, not a fixed cadence (Michael's
+			// ruling: 5-minute constant ticks were too often). The timer arms on
+			// session start and re-arms every time a turn ENDS; any agent activity
+			// (agent_start) clears it. So the heartbeat fires only after a full
+			// HEARTBEAT_MS of genuine inactivity — a long turn never gets
+			// interrupted, and busy periods produce zero ticks.
+			let idleTimer: ReturnType<typeof setTimeout> | null = null;
+			const armIdleHeartbeat = () => {
+				if (!running || HEARTBEAT_MS <= 0) return;
+				if (idleTimer) clearTimeout(idleTimer);
+				idleTimer = setTimeout(() => {
+					idleTimer = null;
+					if (!running) return;
 					const message =
-						"[heartbeat] 5-minute check: run queue-watch, compare against the overnight plan, " +
+						"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
 						"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
 						"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.";
 					try {
@@ -153,7 +156,17 @@ export default function (pi: ExtensionAPI) {
 						pi.sendUserMessage(message, { streamingBehavior: "followUp" });
 					}
 				}, HEARTBEAT_MS);
-			}
+			};
+			pi.on("agent_start", async () => {
+				if (idleTimer) {
+					clearTimeout(idleTimer);
+					idleTimer = null;
+				}
+			});
+			pi.on("agent_end", async () => {
+				armIdleHeartbeat();
+			});
+			armIdleHeartbeat();
 
 			while (running) {
 				try {
