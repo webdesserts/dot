@@ -47,10 +47,13 @@ interface NotificationItem {
 	resource_key?: string;
 }
 
+/// Post-t:264 wire shape (deployed 2026-09-04): persistent items stay in the
+/// queue until explicitly dismissed, LOW notifications are reduced to per-place
+/// counts, and `total` is the recipient's full live count across both urgencies.
 interface LongPollResponse {
-	high?: NotificationItem[];
-	low?: { summary?: string; items?: NotificationItem[] };
-	retracted?: number;
+	priority_notifications?: NotificationItem[];
+	summary?: Record<string, number>;
+	total?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -61,20 +64,24 @@ function renderItem(item: NotificationItem, tier: string): string {
 	return `- [${tier}] ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
 }
 
-function render(data: LongPollResponse, high: NotificationItem[], low: NotificationItem[]): string {
+function render(
+	data: LongPollResponse,
+	priority: NotificationItem[],
+	summary: Record<string, number>,
+): string {
 	const lines: string[] = [];
-	for (const item of high) lines.push(renderItem(item, "HIGH"));
-	const lowItems = low;
-	for (const item of lowItems) lines.push(renderItem(item, "low"));
-	if (data.low?.summary) lines.push(`low summary: ${data.low.summary}`);
-	if (data.retracted) lines.push(`retracted: ${data.retracted}`);
+	for (const item of priority) lines.push(renderItem(item, "HIGH"));
+	const places = Object.entries(summary ?? {});
+	for (const [place, count] of places) lines.push(`- [low] ${place}: ${count}`);
+	if (data.total !== undefined) lines.push(`total unattended: ${data.total}`);
 	if (lines.length === 0) {
-		// Shape changed under us (expected — the endpoint is being reworked).
-		// Wake anyway with a raw dump so the agent can adapt at source.
+		// Shape changed under us again (the endpoint keeps evolving — t:264
+		// was itself a reshape). Wake anyway with a raw dump so the agent can
+		// adapt at source.
 		return `autonomy notifications: response shape not recognized — inspecting raw:\n${JSON.stringify(data).slice(0, 2000)}`;
 	}
-	const head = `autonomy notifications (${high.length} high, ${lowItems.length} low):`;
-	return `${head}\n${lines.join("\n")}\n(durable list: GET ${BASE}/notifications/list with X-Auth-User)`;
+	const head = `autonomy notifications (${priority.length} high, ${places.length} places, total ${data.total ?? "?"}):`;
+	return `${head}\n${lines.join("\n")}`;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -126,22 +133,24 @@ export default function (pi: ExtensionAPI) {
 					});
 					if (!res.ok) throw new Error(`HTTP ${res.status}`);
 					const data = (await res.json()) as LongPollResponse;
-					const high = (data.high ?? []).filter((n) => n.sender !== ACTOR);
-					const low = (data.low?.items ?? []).filter((n) => n.sender !== ACTOR);
+					const priority = (data.priority_notifications ?? []).filter((n) => n.sender !== ACTOR);
+					const summary = Object.fromEntries(
+						Object.entries(data.summary ?? {}).filter(([place]) => !place.startsWith(`${ACTOR}/`)),
+					);
 					// Own-echo rows are consumed (delivery cursor advances) but never
 					// wake — Michael's ruling: own posts should not alert. The service
 					// store has no sender exclusion at write (verified at source), so
 					// the filter lives here until it moves server-side.
-					const trivial = high.length === 0 && low.length === 0 && !data.retracted
-						&& Object.keys(data).every((k) => ["high", "low", "retracted"].includes(k));
+					const trivial = priority.length === 0 && Object.keys(summary).length === 0
+						&& (data.total === undefined || data.total === 0);
 					if (trivial) continue;
 
 					const now = Date.now();
 					if (now - lastWake < WAKE_COOLDOWN_MS) {
 						// Cooldown: buffer the lines so nothing rendered is lost — the
 						// next wake carries them. (The durable list holds regardless.)
-						for (const item of high) backlog.push(renderItem(item, "HIGH"));
-						for (const item of low) backlog.push(renderItem(item, "low"));
+						for (const item of priority) backlog.push(renderItem(item, "HIGH"));
+						for (const [place, count] of Object.entries(summary)) backlog.push(`- [low] ${place}: ${count}`);
 						continue;
 					}
 					lastWake = now;
@@ -149,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 					const message =
 						buffered.length > 0
 							? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
-							: render(data, high, low);
+							: render(data, priority, summary);
 					try {
 						pi.sendUserMessage(message);
 					} catch {
