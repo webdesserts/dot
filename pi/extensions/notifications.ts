@@ -1,224 +1,142 @@
 /**
- * notifications — poll the autonomy daemon's notification long-poll and wake the
- * agent when items arrive.
+ * notifications — autonomy-daemon wake bridge for pi (supervisor shim).
  *
- * WHY: pi has no self-wake primitive. The Claude-harness Monitor tasks could
- * message the orchestrator and force a turn; pi tools are synchronous and jobs
- * are poll-only. The daemon's notification system IS the machine's wake path —
- * it owns deduplication and noise reduction (Michael's design: subscribed posts
- * arrive LOW, mentions/replies always HIGH) — so this extension is a thin
- * cadence-poller, not logic. Every notification wakes, including our own posts;
- * the server filters.
+ * ARCHITECTURE (2026-09-04): pi sessions are always resumed — resumed
+ * sessions restore their extension SNAPSHOT, so code in this file is frozen
+ * at whatever session first loaded it. To keep the bridge updatable without
+ * ever requiring a fresh session, this file is a deliberately boring
+ * SUPERVISOR: it spawns `notifications.worker.mjs` (read fresh from disk at
+ * every spawn) as a child process, forwards pi lifecycle events to the
+ * child's stdin, and delivers the child's stdout wake messages through
+ * `pi.sendUserMessage` with { streamingBehavior: "steer" } (never bare —
+ * bare calls are refused and DROPPED while the agent is busy).
  *
- * MECHANICS: `GET /notifications?timeout=S` (X-Auth-User header) holds up to S
- * seconds and answers as soon as anything undelivered arrives for the actor:
- * `{high: [{place, sender, text, resource_key, handle}], low: {summary, items},
- * retracted}`. Items are delivered ONCE per fetch (cursor is server-side);
- * `/notifications/list` is the durable view. On wake we `pi.sendUserMessage`,
- * which starts a turn when idle and queues as followUp while streaming.
+ * ALL bridge logic lives in the worker: polling, filtering, wake-diff
+ * signatures, cooldown/backlog, rendering, the idle heartbeat. Updating the
+ * bridge = edit the worker file, then either restart the session or
+ * `pkill -f notifications.worker` (this supervisor respawns it within
+ * RESPAWN_DELAY_MS with the new code). The supervisor itself should never
+ * need to change; if it does, that's the one exception that needs a fresh
+ * session.
  *
- * SUBAGENTS MUST NOT RUN THIS: a seat polling the actor's queue consumes the
- * actor's batch. Detection matches harness-context.ts: subagents are spawned
- * with --append-system-prompt, so `systemPromptOptions.appendSystemPrompt` set
- * ⇒ do not poll.
+ * SUBAGENTS MUST NOT SPAWN THE WORKER: subagents are spawned with
+ * --append-system-prompt (matches harness-context.ts's detection), and a
+ * seat polling the actor's queue would consume the actor's batch.
  *
- * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
- * AUTONOMY_ACTOR (default "iris" — set per machine: rhea sets "rhea"),
- * AUTONOMY_WAKE_COOLDOWN_MS (default 30000),
- * AUTONOMY_HEARTBEAT_MS (default 1800000 — fires after 30 minutes of
- * genuine inactivity, re-armed at every turn end, cleared on any activity;
- * 0 disables),
- * AUTONOMY_TOKEN (optional — when set, an `Authorization: Bearer <token>`
- * header rides every request alongside `X-Auth-User`, for machines whose
- * daemon sits behind an authenticating proxy (rhea: corporate key via the
- * t:227 exchange; Caddy validates the bearer and resolves the actor).
- *
- * WAKE DISCIPLINE (Michael's efficiency ruling): the bridge wakes only
- * when notification STATE changes — a state signature (priority handles +
- * summary places + total) is compared against the last wake, and an
- * unchanged signature never wakes, no matter how many polls pass. A
- * constant total:10 is silence, not spam.
+ * Config via env (inherited by the worker): AUTONOMY_BASE,
+ * AUTONOMY_ACTOR, AUTONOMY_TOKEN, AUTONOMY_WAKE_COOLDOWN_MS,
+ * AUTONOMY_HEARTBEAT_MS.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import { watch } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
-const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
-const TOKEN = process.env.AUTONOMY_TOKEN ?? "";
-const POLL_HOLD_SECONDS = 20;
-const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
-const ERROR_BACKOFF_MS = 5_000;
-const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
+const WORKER_PATH = path.join(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"notifications.worker.mjs",
+);
+const RESPAWN_DELAY_MS = 2_000;
 
-interface NotificationItem {
-	place?: string;
-	sender?: string;
-	text?: string;
-	resource_key?: string;
-}
-
-/// Post-t:264 wire shape (deployed 2026-09-04): persistent items stay in the
-/// queue until explicitly dismissed, LOW notifications are reduced to per-place
-/// counts, and `total` is the recipient's full live count across both urgencies.
-interface LongPollResponse {
-	priority_notifications?: NotificationItem[];
-	summary?: Record<string, number>;
-	total?: number;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function authHeaders(): Record<string, string> {
-	const headers: Record<string, string> = { "X-Auth-User": ACTOR };
-	if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
-	return headers;
-}
-
-function stateSignature(data: LongPollResponse, priority: NotificationItem[]): string {
-	// The wake-diff signature: priority handles + summary places/counts +
-	// the VISIBLE total (own-echo rows are filtered out BEFORE this is
-	// computed, so our own posts never count as state changes — Michael's
-	// ruling: own posts should not alert, at all, including as total drift).
-	const handles = priority.map((i) => i.handle ?? i.resource_key ?? i.text ?? "").sort();
-	const summary = Object.entries(data.summary ?? {})
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([place, count]) => `${place}:${count}`);
-	const visibleTotal = priority.length + Object.values(data.summary ?? {}).reduce((a, b) => a + b, 0);
-	return JSON.stringify({ h: handles, s: summary, t: visibleTotal });
-}
-
-function renderItem(item: NotificationItem, tier: string): string {
-	const place = item.place ? ` @ ${item.place}` : "";
-	const key = item.resource_key ? ` (${item.resource_key})` : "";
-	return `- [${tier}] ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
-}
-
-function render(
-	data: LongPollResponse,
-	priority: NotificationItem[],
-	summary: Record<string, number>,
-): string {
-	const lines: string[] = [];
-	for (const item of priority) lines.push(renderItem(item, "HIGH"));
-	const places = Object.entries(summary ?? {});
-	for (const [place, count] of places) lines.push(`- [low] ${place}: ${count}`);
-	if (data.total !== undefined) lines.push(`total unattended: ${data.total}`);
-	if (lines.length === 0) {
-		// Shape changed under us again (the endpoint keeps evolving — t:264
-		// was itself a reshape). Wake anyway with a raw dump so the agent can
-		// adapt at source.
-		return `autonomy notifications: response shape not recognized — inspecting raw:\n${JSON.stringify(data).slice(0, 2000)}`;
-	}
-	const head = `autonomy notifications (${priority.length} high, ${places.length} places, total ${data.total ?? "?"}):`;
-	return `${head}\n${lines.join("\n")}`;
-}
-
-export default function (pi: ExtensionAPI) {
+export default function (pi) {
 	let running = false;
+	let child = null;
+	let watcher = null;
+	let respawnTimer = null;
+
+	const send = (message) => {
+		if (!message) return;
+		try {
+			// steer: injected in-between rounds of a running turn (Michael's
+			// ruling). NEVER bare — while busy the runtime refuses and DROPS.
+			pi.sendUserMessage(message, { streamingBehavior: "steer" });
+		} catch (err) {
+			console.error(`[notifications] send failed: ${err}`);
+		}
+	};
+
+	const spawnWorker = () => {
+		if (!running) return;
+		if (child) return;
+		child = spawn(process.execPath, [WORKER_PATH], {
+			env: process.env,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		let stdoutBuf = "";
+		child.stdout.on("data", (chunk) => {
+			stdoutBuf += chunk;
+			let idx;
+			while ((idx = stdoutBuf.indexOf("\n")) !== -1) {
+				const line = stdoutBuf.slice(0, idx);
+				stdoutBuf = stdoutBuf.slice(idx + 1);
+				if (!line) continue;
+				try {
+					const parsed = JSON.parse(line);
+					if (parsed.kind === "wake" || parsed.kind === "heartbeat") send(parsed.message);
+				} catch {
+					// non-JSON line — surface it as a wake so nothing is lost
+					send(line);
+				}
+			}
+		});
+		child.stderr.on("data", (chunk) => {
+			console.error(`[notifications.worker] ${chunk}`);
+		});
+		child.on("exit", (code) => {
+			child = null;
+			if (!running) return;
+			console.error(`[notifications.worker] exited (${code}); respawn in ${RESPAWN_DELAY_MS}ms`);
+			respawnTimer = setTimeout(spawnWorker, RESPAWN_DELAY_MS);
+		});
+	};
+
+	const killWorker = () => {
+		if (child) {
+			try {
+				child.kill();
+			} catch {}
+			child = null;
+		}
+	};
+
+	// Hot-swap: when the worker file changes on disk, respawn so the new
+	// code loads without touching the session.
+	const armWatcher = () => {
+		try {
+			watcher = watch(WORKER_PATH, () => {
+				console.error("[notifications] worker file changed — respawning");
+				killWorker();
+				spawnWorker();
+			});
+		} catch (err) {
+			console.error(`[notifications] fs.watch unavailable: ${err}`);
+		}
+	};
 
 	pi.on("session_start", async (event) => {
-		// Match harness-context.ts: subagents are spawned with --append-system-prompt.
 		const isSubagent = Boolean(event.systemPromptOptions?.appendSystemPrompt);
 		if (isSubagent || running) return;
 		running = true;
 
-		const controller = new AbortController();
 		pi.on("session_shutdown", async () => {
 			running = false;
-			controller.abort();
+			if (watcher) watcher.close();
+			if (respawnTimer) clearTimeout(respawnTimer);
+			killWorker();
 		});
 
-		void (async () => {
-			let lastWake = 0;
-			let backlog: string[] = [];
-			let lastSig: string | null = null;
-
-			// Heartbeat: IDLE-timeout self-wake, not a fixed cadence (Michael's
-			// ruling: 5-minute constant ticks were too often). The timer arms on
-			// session start and re-arms every time a turn ENDS; any agent activity
-			// (agent_start) clears it. So the heartbeat fires only after a full
-			// HEARTBEAT_MS of genuine inactivity — a long turn never gets
-			// interrupted, and busy periods produce zero ticks.
-			let idleTimer: ReturnType<typeof setTimeout> | null = null;
-			const armIdleHeartbeat = () => {
-				if (!running || HEARTBEAT_MS <= 0) return;
-				if (idleTimer) clearTimeout(idleTimer);
-				idleTimer = setTimeout(() => {
-					idleTimer = null;
-					if (!running) return;
-					const message =
-						"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
-						"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
-						"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.";
-					// steer: injected in-between rounds of the running turn (Michael's ruling),
-					// NEVER send bare — when busy the runtime does not throw, it
-					// logs "Agent is already processing" and DROPS the message.
-					pi.sendUserMessage(message, { streamingBehavior: "steer" });
-				}, HEARTBEAT_MS);
-			};
-			pi.on("agent_start", async () => {
-				if (idleTimer) {
-					clearTimeout(idleTimer);
-					idleTimer = null;
-				}
-			});
-			pi.on("agent_end", async () => {
-				armIdleHeartbeat();
-			});
-			armIdleHeartbeat();
-
-			while (running) {
-				try {
-					const res = await fetch(`${BASE}/notifications?timeout=${POLL_HOLD_SECONDS}`, {
-						headers: authHeaders(),
-						signal: controller.signal,
-					});
-					if (!res.ok) throw new Error(`HTTP ${res.status}`);
-					const data = (await res.json()) as LongPollResponse;
-					const priority = (data.priority_notifications ?? []).filter((n) => n.sender !== ACTOR);
-					const summary = Object.fromEntries(
-						Object.entries(data.summary ?? {}).filter(([place]) => !place.startsWith(`${ACTOR}/`)),
-					);
-					// Own-echo rows are consumed (delivery cursor advances) but never
-					// wake — Michael's ruling: own posts should not alert. The service
-					// store has no sender exclusion at write (verified at source), so
-					// the filter lives here until it moves server-side.
-					const trivial = priority.length === 0 && Object.keys(summary).length === 0
-						&& (data.total === undefined || data.total === 0);
-					if (trivial) continue;
-
-					// Wake discipline: only state CHANGES wake. A signature identical
-					// to the last wake (same handles, same summary, same total) is
-					// silence — persistent items re-offering is not news.
-					const sig = stateSignature(data, priority);
-					if (sig === lastSig) continue;
-					lastSig = sig;
-
-					const now = Date.now();
-					if (now - lastWake < WAKE_COOLDOWN_MS) {
-						// Cooldown: buffer the lines so nothing rendered is lost — the
-						// next wake carries them. (The durable list holds regardless.)
-						for (const item of priority) backlog.push(renderItem(item, "HIGH"));
-						for (const [place, count] of Object.entries(summary)) backlog.push(`- [low] ${place}: ${count}`);
-						continue;
-					}
-					lastWake = now;
-					const buffered = backlog.splice(0);
-					const message =
-						buffered.length > 0
-							? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
-							: render(data, priority, summary);
-					// steer: injected in-between rounds of the running turn (Michael's ruling),
-					// NEVER send bare — when busy the runtime does not throw, it
-					// logs "Agent is already processing" and DROPS the message.
-					pi.sendUserMessage(message, { streamingBehavior: "steer" });
-				} catch (err) {
-					if (controller.signal.aborted) break;
-					// Daemon down or transient — back off and keep the loop alive.
-					console.error(`[notifications] poll failed: ${err}; retrying in ${ERROR_BACKOFF_MS}ms`);
-					await sleep(ERROR_BACKOFF_MS);
-				}
+		// Forward lifecycle events to the worker's stdin (the heartbeat's
+		// turn-end re-arm needs agent_start/agent_end visibility).
+		const forward = (name) => (payload) => {
+			if (child?.stdin?.writable) {
+				child.stdin.write(`${JSON.stringify({ event: name })}\n`);
 			}
-		})();
+		};
+		pi.on("agent_start", forward("agent_start"));
+		pi.on("agent_end", forward("agent_end"));
+
+		spawnWorker();
+		armWatcher();
 	});
 }
