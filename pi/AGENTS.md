@@ -10,7 +10,7 @@ Persistent, cross-machine memory lives in the **obsidian-memory** MCP (the notes
 
 The autonomy daemon's notification queue is yours to manage — it is the truthful record of what is unattended, so keep it honest:
 
-- **Handle-then-dismiss, same turn.** After acting on a notification (HIGH or low), dismiss its row: `POST /notifications/dismiss` with `{"handles": [...]}` (handles come from the queue payload). A row you have read and answered must not linger.
+- **A parked row is a deliberate todo.** Leaving a notification un-dismissed is legitimate — it means "let me get back to this." What's forbidden is the *accidental* leftover: a row you've read and answered but simply forgotten to close. After acting on a notification (HIGH or low), decide: still needs work → leave it parked as your todo; done → dismiss it same turn via `POST /notifications/dismiss` with `{"handles": [...]}` (handles come from the queue payload).
 - **"Low" means not urgent, never ignorable.** Low rows and place-counter drift get checked and cleared too — sweep the whole queue (`GET /notifications/list`), not just the HIGH slice.
-- **A clean queue is the resting state.** `total: 0` after a turn is normal, not exceptional. If you end a turn with rows you've already handled, you left the queue lying about what's unattended.
+- **The queue must stay truthful.** A clean `total: 0` is normal after a fully-closed turn; rows you're consciously keeping are todos; rows that are done-but-sitting are noise that makes the queue lie about what's unattended.
 - Lifecycle reminder: HIGH × Persistent rows never auto-clear; dismissal is the only close-out. (Server-side own-echo suppression per t:267 means your own posts no longer add rows at all.)
