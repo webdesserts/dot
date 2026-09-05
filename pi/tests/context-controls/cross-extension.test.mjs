@@ -208,15 +208,10 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	const compactionInFlight = new Promise((r) => { releaseCompaction = r; });
 	faux.setResponses([
 		fauxAssistantMessage([fauxText("Requesting compaction."), fauxToolCall("compact", {})]),
-		// Heartbeat continuation: the model calls usage() so the run has a
-		// turn_end after the confirmed outcome exists — the outcome is then
-		// queued via stock sendMessage({triggerTurn:false}) and appended to
-		// session history at the run's flush point (model-visible next run).
-		fauxAssistantMessage([fauxToolCall("usage", {})]),
-		fauxAssistantMessage("Continuing after compaction."),
+		// Capture the first heartbeat request, before any usage tool or human follow-up.
 		(context) => {
 			capturedContexts.push(context);
-			return fauxAssistantMessage("Seen.");
+			return fauxAssistantMessage("Continuing after compaction.");
 		},
 	]);
 
@@ -246,10 +241,7 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	assert.ok(!compactionEntry(), "compaction still in flight behind the gate");
 	assert.equal(faux.state.callCount, 1, "no heartbeat turn while the compaction is in flight");
 
-	// Release the gate: compaction confirms; the deferred heartbeat resumes.
-	// The continuation's usage() turn_end queues the confirmed outcome via
-	// stock sendMessage({triggerTurn:false}); the run's flush appends it to
-	// session history — model-visible without any extra turn.
+	// Confirmed outcome must reach the very first heartbeat continuation.
 	releaseCompaction();
 	const outcomeEntry = () =>
 		session.sessionManager.getEntries().find(
@@ -257,21 +249,17 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 		);
 	const outcomeAppeared = await waitUntil(() => outcomeEntry(), 20_000);
 	assert.ok(outcomeAppeared, "the confirmed outcome is in session history (model-visible, no extra turn)");
-	// The deferred heartbeat continuation then delivers (goal cycle re-arms):
-	// usage turn + its text response = two more model calls.
-	const continued = await waitUntil(() => faux.state.callCount >= 3, 20_000);
-	assert.ok(continued, "heartbeat continuation ran (usage turn + its text response)");
-	// Freeze the exact count: stop the goal heartbeat cycle.
+	const continued = await waitUntil(() => faux.state.callCount >= 2 && capturedContexts.length > 0, 20_000);
+	assert.ok(continued, "heartbeat continuation ran without another human prompt");
 	await hbCommand("pause", { ui: { notify() {} } });
-	assert.equal(faux.state.callCount, 3, "EXACT faux call count: compact turn + heartbeat usage turn + its text response");
-
-	// The outcome reaches the model in the next run's request context.
-	await session.prompt("Continue.");
-	assert.equal(faux.state.callCount, 4, "EXACT faux call count after the follow-up prompt");
+	assert.equal(faux.state.callCount, 2, "only the compact request and heartbeat continuation called the model");
 	assert.ok(
 		capturedContexts.some((c) => JSON.stringify(c).includes("Compaction completed successfully")),
-		"the confirmed outcome reached the model context",
+		"the first continuation already receives confirmed completion",
 	);
+	assert.equal(session.sessionManager.getEntries().filter(
+		(e) => e.type === "custom_message" && JSON.stringify(e).includes("Compaction completed successfully"),
+	).length, 1, "native event plus callback report one outcome");
 	const heartbeatUserEntry = session.sessionManager.getEntries().find(
 		(e) => e.type === "message" && JSON.stringify(e).includes("[heartbeat] goal check"),
 	);

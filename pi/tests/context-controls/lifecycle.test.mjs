@@ -272,3 +272,38 @@ test("real session: compact batched with a sibling is rejected and the sibling s
 	// EXACT faux call count: the batch turn + the follow-up response turn.
 	assert.equal(faux.state.callCount, 2, "exactly two model calls (batch turn + follow-up)");
 });
+
+test('the immediately next text-only model response receives a crossing alert', async (t) => {
+	const faux = fauxProvider({ models: [{ id: 'faux-alert-boundary', contextWindow: 200_000, maxTokens: 4_000 }] });
+	let output = 'small baseline';
+	let nextContext;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall('sibling', {})]),
+		() => {
+			output = 'x'.repeat(360_000);
+			return fauxAssistantMessage([fauxToolCall('sibling', {})]);
+		},
+		(context) => {
+			nextContext = context;
+			return fauxAssistantMessage('Finished without another tool.');
+		},
+	]);
+	const { session } = await makeHermeticSession(t, {
+		faux,
+		extensionPaths: { files: ['context-controls.ts'], paths: ['context-controls.ts'] },
+		extensionFactories: [(pi) => { pi.registerTool({
+			name: 'sibling', label: 'Fixture output', description: 'Return controlled fixture data',
+			parameters: { type: 'object', properties: {}, additionalProperties: false },
+			execute: async () => ({ content: [{ type: 'text', text: output }] }),
+		}); }],
+	});
+	await session.prompt('Read both fixture outputs, then finish.');
+	assert.equal(faux.state.callCount, 3, 'only the three scripted responses ran');
+	assert.ok(JSON.stringify(nextContext).includes('Context pressure: usage crossed 40%'),
+		'the first response after the large tool result receives the warning');
+	const entries = session.sessionManager.getEntries();
+	assert.equal(entries.filter((e) => e.type === 'custom_message' && JSON.stringify(e).includes('Context pressure:')).length, 0, 'pressure notices do not accumulate in history');
+	assert.ok(entries.filter((e) => e.message?.role === 'toolResult').every(
+		(e) => !JSON.stringify(e.message.content).includes('Context pressure:'),
+	), 'tool output is not rewritten to carry alerts');
+});

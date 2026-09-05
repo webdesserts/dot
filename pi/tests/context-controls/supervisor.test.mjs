@@ -7,8 +7,8 @@
  * LLM calls, no live parent state. Covers: 40/60 alerts with per-epoch
  * delivered state (no 39→41 flapping; epoch resets ONLY on a confirmed
  * compaction entry or model/window change — unknown/decreasing never reset),
- * coalesced jumps, stock no-turn delivery via pi.sendMessage({triggerTurn:
- * false}) at turn_end without sendUserMessage/tool-result mutation, branch-
+ * coalesced jumps, stock context projection without new messages or
+ * tool-result mutation, no-turn compaction outcomes, branch-
  * marker fulfillment correlation (pre-existing/other-branch/missing-marker
  * counterexamples), deferred agent_settled dispatch with terminate:true
  * sole-call acceptance and sibling rejection, duplicate/in-flight guards,
@@ -29,7 +29,9 @@ function fixture() {
 	const handlers = new Map();
 	const tools = new Map();
 	const sent = []; // pi.sendUserMessage — must stay EMPTY forever
-	const sentCustom = []; // pi.sendMessage — the stock no-turn delivery channel
+	const sentCustom = []; // Durable compaction outcomes only.
+	const projected = [];
+	const observedNotices = [];
 	const clock = { now: T0, seq: 0 };
 	class FakeDate extends Date { }
 	FakeDate.now = () => clock.now;
@@ -38,7 +40,10 @@ function fixture() {
 		registerTool: (def) => tools.set(def.name, def),
 		registerCommand: () => {},
 		sendUserMessage: (...a) => sent.push(a),
-		sendMessage: (message, options) => sentCustom.push({ message, options }),
+		sendMessage: (message, options) => {
+			sentCustom.push({ message, options });
+			observedNotices.push(message.content[0].text);
+		},
 		appendEntry: (customType, data) => {
 			// Mirror the real session: custom entries are readable via
 			// getEntries() and carry generated ids.
@@ -77,25 +82,30 @@ function fixture() {
 			if (state.compactImpl) state.compactImpl(options);
 		},
 	};
-	const event = (name, arg = {}, context = ctx) => handlers.get(name)?.(arg, context);
+	const event = (name, arg = {}, context = ctx) => {
+		const result = handlers.get(name)?.(arg, context);
+		if (name === 'context' && result?.messages) {
+			for (const message of result.messages.slice(arg.messages.length)) {
+				projected.push(message);
+				observedNotices.push(message.content[0].text);
+			}
+		}
+		return result;
+	};
 	const usage = (tokens, window) => ({
 		tokens,
 		contextWindow: window,
 		percent: tokens === null ? null : (tokens / window) * 100,
 	});
 	return {
-		handlers, tools, sent, sentCustom, clock, ctx, state, usage, event,
+		handlers, tools, sent, sentCustom, projected, clock, ctx, state, usage, event,
 		observe: (tokens, window = 200_000, model) => {
 			state.usage = usage(tokens, window);
 			if (model) state.modelId = model;
-			event('turn_end');
+			event('context', { messages: [] });
 		},
-		// Notices delivered through the stock no-turn channel at turn_end.
-		notices: () => sentCustom.map((s) => s.message.content[0].text),
-		// Pressure-alert notices only (the confirmed-outcome notice is separate).
-		pressures: () => sentCustom.map((s) => s.message.content[0].text).filter((t) => t.includes('Context pressure')),
-		// The exact pi.sendMessage options for the latest delivery.
-		lastDeliveryOptions: () => sentCustom.at(-1)?.options ?? null,
+		notices: () => observedNotices,
+		pressures: () => observedNotices.filter((t) => t.includes('Context pressure')),
 	};
 }
 
@@ -137,22 +147,20 @@ test('a multi-threshold jump is coalesced into ONE notice', () => {
 	assert.match(notices[0], /60%/);
 });
 
-test('delivery is stock pi.sendMessage with triggerTurn:false; sendUserMessage never used', () => {
+test('alerts project into context without sending messages or creating turns', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	f.observe(50_000);
 	f.observe(170_000); // 85% — jumps both levels
 	assert.equal(f.sent.length, 0, 'sendUserMessage NEVER called');
-	assert.equal(f.sentCustom.length, 1);
-	const delivery = f.sentCustom[0];
-	assert.equal(delivery.options?.triggerTurn, false, 'never creates a turn');
-	assert.equal(delivery.message.customType, 'context-controls-notice');
-	// Delivered once.
+	assert.equal(f.sentCustom.length, 0, 'no message is added to session history');
+	assert.equal(f.projected.length, 1);
+	assert.equal(f.projected[0].customType, 'context-controls-notice');
 	f.observe(175_000);
-	assert.equal(f.sentCustom.length, 1, 'no repeat');
+	assert.equal(f.projected.length, 1, 'no repeat');
 });
 
-test('turn_end delivery reaches the immediately next model request without tool-result mutation', () => {
+test('context delivery reaches the current request without tool-result mutation', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	// No tool_result / before_agent_start delivery machinery remains.
@@ -160,10 +168,9 @@ test('turn_end delivery reaches the immediately next model request without tool-
 	assert.equal(f.handlers.get('before_agent_start'), undefined, 'no before_agent_start fallback needed');
 	f.observe(50_000);
 	f.observe(130_000); // 65%
-	assert.equal(f.sentCustom.length, 1, 'notice sent at the crossing turn_end');
-	// The SDK flushes it after turn_end handlers: the next request sees it.
+	assert.equal(f.projected.length, 1, 'notice included in the crossing request');
 	f.observe(140_000);
-	assert.equal(f.sentCustom.length, 1, 'delivered exactly once');
+	assert.equal(f.projected.length, 1, 'delivered exactly once');
 });
 
 test('unknown usage and decreases never reset the epoch; only a confirmed compaction entry does', () => {
@@ -174,7 +181,7 @@ test('unknown usage and decreases never reset the epoch; only a confirmed compac
 	assert.equal(f.pressures().length, 1);
 	// Null usage (may be observed post-compaction): never resets the epoch.
 	f.state.usage = f.usage(null, WINDOW);
-	f.event('turn_end');
+	f.event('context', { messages: [] });
 	// Direct regrowth without any null observation and without a confirmed
 	// compaction: still silent (no blind reset).
 	f.observe(100_000); // 50%
@@ -199,12 +206,12 @@ test('unknown usage and decreases never reset the epoch; only a confirmed compac
 
 test('delivered levels survive a same-epoch reload; new/fork sessions start fresh', () => {
 	const f = fixture();
+	f.state.branch.push({ type: 'compaction', id: 'cmp-1' });
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	f.observe(50_000);
 	f.observe(130_000); // 40 and 60 announced; persisted via appendEntry
 	assert.equal(f.pressures().length, 1);
-	// Same-epoch reload: the persisted epoch marker (cmp-1) is on the branch.
-	f.state.branch.push({ type: 'compaction', id: 'cmp-1' });
+	// Same-epoch reload: no new compaction has occurred since the alerts.
 	f.event('session_start', { reason: 'reload' }, f.ctx);
 	f.observe(82_000); // 41%
 	assert.equal(f.pressures().length, 1, 'delivered levels preserved across reload');
@@ -228,12 +235,12 @@ test('model/window changes establish a new epoch silently', () => {
 	assert.equal(f.pressures().length, 1);
 	// Window change re-baselines with a new epoch.
 	f.state.usage = f.usage(150_000, 400_000);
-	f.event('turn_end');
+	f.event('context', { messages: [] });
 	assert.equal(f.pressures().length, 1, 'window change is silent');
 	// Model change re-baselines silently.
 	f.state.usage = f.usage(170_000, 400_000);
 	f.state.modelId = 'other-model';
-	f.event('turn_end');
+	f.event('context', { messages: [] });
 	assert.equal(f.pressures().length, 1, 'model change is silent');
 });
 
@@ -411,4 +418,52 @@ test('branch/session replacement invalidates queued requests; stale callbacks ar
 	f.event('agent_settled', {}, brokenCtx);
 	report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /stale extension context/);
+});
+
+test('an old callback cannot finish a newer dispatched request', async () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' });
+	await f.tools.get('compact').execute('old', {}, undefined, undefined, f.ctx);
+	f.event('agent_settled');
+	const old = f.state.compactCalls[0].options;
+	f.event('session_shutdown');
+	f.state.sessionId = 'session-B';
+	f.event('session_start', { reason: 'new' });
+	await f.tools.get('compact').execute('new', {}, undefined, undefined, f.ctx);
+	f.event('agent_settled');
+	const fresh = f.state.compactCalls[1].options;
+	old.onComplete({ tokensBefore: 111 });
+	assert.equal(f.notices().length, 0, 'old completion is not new-operation success');
+	const duplicate = await f.tools.get('compact').execute('duplicate', {}, undefined, undefined, f.ctx);
+	assert.equal(duplicate.details.inFlight, true, 'the new operation remains in flight');
+	fresh.onComplete({ tokensBefore: 222 });
+	assert.equal(f.notices().length, 1);
+});
+
+test('the actual tree-navigation event invalidates queued compaction', async () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' });
+	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	f.event('session_before_tree');
+	f.event('agent_settled');
+	assert.equal(f.state.compactCalls.length, 0);
+});
+
+test('reload does not restore another model or window epoch', () => {
+	for (const change of ['model', 'window']) {
+		const f = fixture();
+		f.state.branch = [{ type: 'message', id: 'root' }];
+		f.event('session_start', { reason: 'startup' });
+		f.observe(60_000);
+		f.observe(90_000);
+		assert.equal(f.pressures().length, 1);
+		f.event('session_shutdown');
+		if (change === 'model') f.state.modelId = 'different-model';
+		const window = change === 'window' ? 100_000 : 200_000;
+		f.state.usage = f.usage(window * 0.3, window);
+		f.event('session_start', { reason: 'reload' });
+		f.observe(window * 0.3, window);
+		f.observe(window * 0.45, window);
+		assert.equal(f.pressures().length, 2, `${change} establishes a new epoch`);
+	}
 });

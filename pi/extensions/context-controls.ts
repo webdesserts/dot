@@ -20,11 +20,11 @@
  * CONFIRMED compaction entry (session_compact, by entry identity) or a
  * model/window change; unknown (null) usage and decreases never reset it.
  * Delivered levels are persisted per session and restored across same-epoch
- * reload/resume. Crossings coalesce into one notice. Delivery is stock
- * `pi.sendMessage(..., { triggerTurn: false })` at `turn_end`: the SDK
- * flushes pending custom messages after turn_end handlers, so the very next
- * model request — even a text-only response — sees the notice, with no extra
- * turn and no tool-result mutation. sendUserMessage is never called.
+ * reload/resume. Crossings coalesce into one notice projected through the
+ * stock context hook into the request being built. Alerts create no turn,
+ * mutate no tool result and do not accumulate in session history. Confirmed
+ * compaction outcomes use sendMessage with triggerTurn:false. No user
+ * messages or independent continuation loop are generated.
  */
 import { Type } from "typebox";
 
@@ -44,7 +44,6 @@ export default function (pi) {
 	if (process.env.PI_SUBAGENT_CHILD === "1") return;
 
 	let currentCtx = null;
-	let owner = null;
 	let generation = 0;
 
 	// ── compaction request state ──
@@ -70,6 +69,21 @@ export default function (pi) {
 		} catch {
 			return null;
 		}
+	};
+
+	const modelIdentity = (ctx) => {
+		try { return ctx?.model ? `${ctx.model.provider ?? ""}/${ctx.model.id}` : null; }
+		catch { return null; }
+	};
+	const latestCompactionId = (ctx) => {
+		try { return ctx?.sessionManager?.getBranch?.().filter((e) => e.type === "compaction").at(-1)?.id ?? null; }
+		catch { return null; }
+	};
+	const invalidateRequests = () => {
+		generation += 1;
+		pending = null;
+		inFlight = false;
+		inFlightRequest = null;
 	};
 
 	const recordFailure = (outcome, detail) => {
@@ -143,24 +157,12 @@ export default function (pi) {
 			}
 		})();
 		if (!usage) return;
-		const modelId = (() => {
-			try {
-				return ctx?.model?.id ?? null;
-			} catch {
-				return null;
-			}
-		})();
+		const modelId = modelIdentity(ctx);
 		// Model/window change: new epoch, re-baseline silently.
-		if (lastWindow !== null && usage.contextWindow !== lastWindow) {
+		if ((lastWindow !== null && usage.contextWindow !== lastWindow) ||
+			(lastModelId !== null && modelId !== null && modelId !== lastModelId)) {
 			lastPercent = null;
 			deliveredLevels = new Set();
-			epochMarker = null;
-			pendingNotice = null;
-		}
-		if (lastModelId !== null && modelId !== null && modelId !== lastModelId) {
-			lastPercent = null;
-			deliveredLevels = new Set();
-			epochMarker = null;
 			pendingNotice = null;
 		}
 		lastWindow = usage.contextWindow ?? lastWindow;
@@ -256,25 +258,24 @@ export default function (pi) {
 			inFlight = true;
 			ctx.compact({
 				customInstructions: request.customInstructions,
-				onComplete: (result) => finish("success", undefined, {
+				onComplete: (result) => finish(request, "success", undefined, {
 					tokensBefore: result?.tokensBefore,
 					estimatedTokensAfter: result?.estimatedTokensAfter,
 				}),
-				onError: (error) => finish("error", error?.message ?? String(error)),
+				onError: (error) => finish(request, "error", error?.message ?? String(error)),
 			});
 		} catch (err) {
-			finish("error", err?.message ?? String(err));
+			finish(request, "error", err?.message ?? String(err));
 		}
 	};
 
 	// Terminal record for OUR dispatched operation. Stale-era callbacks and
 	// operations already recorded by their native event are skipped.
-	const finish = (outcome, detail, extra = {}) => {
-		const request = inFlightRequest;
-		if (!request) return;
+	const finish = (request, outcome, detail, extra = {}) => {
+		if (inFlightRequest !== request || request.generation !== generation ||
+			request.owner !== sessionOwner(currentCtx)) return;
 		inFlightRequest = null;
 		inFlight = false;
-		if (request.generation !== generation || request.owner !== sessionOwner(currentCtx)) return;
 		if (outcome === "error" && fulfilledAfterRequest(currentCtx, request)) {
 			notifyOutcome(`op:${request.generation}`, {
 				outcome: "success",
@@ -292,6 +293,8 @@ export default function (pi) {
 		try {
 			pi.appendEntry(ENTRY_TYPE, {
 				owner: sessionOwner(),
+				modelId: modelIdentity(currentCtx),
+				contextWindow: currentCtx?.getContextUsage?.()?.contextWindow ?? lastWindow,
 				epochMarker,
 				leafId: branchSnapshot(currentCtx)?.leafId ?? null,
 				delivered: [...deliveredLevels],
@@ -311,6 +314,9 @@ export default function (pi) {
 				const e = entries[i];
 				if (e?.type !== "custom" || e?.customType !== ENTRY_TYPE) continue;
 				if (e?.data?.owner !== self) continue;
+				if (e.data.modelId !== modelIdentity(ctx) ||
+					e.data.contextWindow !== ctx?.getContextUsage?.()?.contextWindow ||
+					e.data.epochMarker !== latestCompactionId(ctx)) return false;
 				// The persisted epoch is valid only if its defining identity
 				// still exists on the current branch: the confirmed compaction
 				// entry, or (pre-compaction epochs) the persisted leaf entry.
@@ -335,10 +341,8 @@ export default function (pi) {
 
 	pi.on("session_start", (event, ctx) => {
 		currentCtx = ctx ?? null;
-		owner = sessionOwner(ctx);
-		generation += 1;
-		pending = null;
-		inFlight = false;
+		invalidateRequests();
+		batchToolCalls = [];
 		lastCompaction = null;
 		pendingNotice = null;
 		notifiedKey = null;
@@ -348,25 +352,21 @@ export default function (pi) {
 		// Same-epoch reload/resume keeps delivered announcements; new/fork
 		// sessions (or a stale epoch) start fresh.
 		const reason = event?.reason;
-		const restored = (reason === "reload" || reason === "resume") && restoreEpoch(ctx);
+		const restored = reason !== "new" && reason !== "fork" && restoreEpoch(ctx);
 		if (!restored) {
 			deliveredLevels = new Set();
-			epochMarker = null;
+			epochMarker = latestCompactionId(ctx);
 		}
 	});
 	pi.on("session_shutdown", () => {
-		pending = null;
-		inFlight = false;
+		invalidateRequests();
 		pendingNotice = null;
 		notifiedKey = null;
-		generation += 1;
 		currentCtx = null;
 	});
-	pi.on("session_before_switch", () => {
-		// Branch replacement invalidates any queued request for this era.
-		pending = null;
-		inFlight = false;
-	});
+	pi.on("session_before_switch", invalidateRequests);
+	pi.on("session_before_tree", invalidateRequests);
+	pi.on("session_before_fork", invalidateRequests);
 	pi.on("message_end", (event, _ctx) => {
 		const message = event?.message;
 		if (message?.role === "assistant") {
@@ -375,23 +375,18 @@ export default function (pi) {
 				: [];
 		}
 	});
-	pi.on("turn_end", (_event, ctx) => {
+	pi.on("context", (event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
 		evaluateAlerts(ctx);
-		// Stock flush: pending custom messages sent here reach the immediately
-		// next model request without creating a turn or touching tool results.
 		const notice = pendingNotice;
-		if (notice) {
-			try {
-				pi.sendMessage(
-					{ customType: "context-controls-notice", content: [{ type: "text", text: notice }] },
-					{ triggerTurn: false },
-				);
-			} catch (err) {
-				console.error(`[context-controls] notice delivery failed: ${err}`);
-			}
-			pendingNotice = null;
-		}
+		pendingNotice = null;
+		if (!notice) return;
+		// Project once into the request being built, without starting a turn,
+		// changing tool output, or accumulating alert messages in history.
+		return { messages: [...event.messages, {
+			role: "custom", customType: "context-controls-notice",
+			content: [{ type: "text", text: notice }], display: false, timestamp: Date.now(),
+		}] };
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		currentCtx = ctx ?? currentCtx;

@@ -58,12 +58,14 @@ function fakeCtx(state) {
 
 test("Pi loads the dependency-free extension with usage/compact tools", async (t) => {
 	const loaded = await isolatedExtension(t);
+	const outcomes = [];
+	loaded.runtime.sendMessage = (message) => outcomes.push(message);
 	const extension = loaded.extensions[0];
 	const toolDef = extension.tools.get("usage")?.definition;
 	const compactDef = extension.tools.get("compact")?.definition;
 	assert.ok(toolDef, "usage tool registered");
 	assert.ok(compactDef, "compact tool registered");
-	assert.ok(extension.handlers.has("turn_end"), "alert evaluation handler registered");
+	assert.ok(extension.handlers.has("context"), "request-context handler registered");
 	assert.ok(extension.handlers.has("agent_settled"), "dispatch handler registered");
 	assert.ok(extension.handlers.has("session_compact"), "native compaction handler registered");
 	// Stock no-turn delivery only: no tool-result mutation, no
@@ -109,6 +111,8 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	// first request's in-flight guard is resolved first via its terminal
 	// callback, mirroring a completed compaction).
 	state.compactCalls[0].onComplete({ tokensBefore: 100_000, estimatedTokensAfter: 10_000 });
+	assert.equal(outcomes.length, 1);
+	assert.match(outcomes[0].content[0].text, /completed successfully/);
 	extension.handlers.get("message_end")[0]({
 		message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "compact" }, { type: "toolCall", id: "b", name: "bash" }] },
 	}, ctx);
@@ -116,15 +120,13 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	assert.equal(rejected.details.rejected, "siblings");
 	assert.equal(rejected.terminate, undefined);
 
-	// Alerts: real turn_end evaluation; delivery is stock pi.sendMessage
-	// with triggerTurn:false (the SDK flushes it into the immediately next
-	// model request). The extension never calls sendUserMessage (which would
-	// wake the model) and never mutates tool results.
 	const sent = [];
-	const piProbe = { sendUserMessage: (...a) => sent.push(a) };
+	loaded.runtime.sendUserMessage = (...args) => sent.push(args);
 	state.usage = { tokens: 50_000, contextWindow: 200_000, percent: 25 };
-	extension.handlers.get("turn_end")[0]({}, ctx);
+	extension.handlers.get("context")[0]({ messages: [] }, ctx);
 	state.usage = { tokens: 170_000, contextWindow: 200_000, percent: 85 };
-	extension.handlers.get("turn_end")[0]({}, ctx);
+	const projection = extension.handlers.get("context")[0]({ messages: [] }, ctx);
+	assert.equal(projection.messages.length, 1);
+	assert.match(projection.messages[0].content[0].text, /40% and 60%/);
 	assert.equal(sent.length, 0, "no wake message, no extra LLM turn");
 });
