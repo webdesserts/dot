@@ -1,131 +1,130 @@
 ---
 name: nushell
-description: "Nushell idioms and patterns. Use when executing shell commands, writing scripts, editing .nu files, or any terminal operation."
+description: "Nushell shell work and tool composition: structured pipelines, typed commands, external/HTTP errors, safe paths, modules, plugins, and persistent MCP sessions. Use for terminal operations and .nu scripts."
 ---
 
-## Core Principles
+# Nushell for agent work
 
-Nushell works with **structured data**, not text streams. Prefer native nushell commands over external commands because they return tables, records, and lists — not raw strings.
+Use the available Nushell MCP evaluator for ad-hoc shell work. Prefer native structured operations over Bash pipelines; use another shell when an existing script genuinely requires its semantics. A command signature is not a permission grant: preserve the surrounding harness's authorization and filesystem boundaries.
 
-- Use `ls` instead of `find` or `ls -R`
-- Use `glob` for file pattern matching
-- Use `ps` for process listing
-- Use `sys` for system info
-- Use `open` instead of `cat`
+Examples were checked with **Nu 0.114.0**. Discover the installed behavior rather than assuming flags, plugins or user configuration are loaded. This skill describes today's workflow, not a decision to replace all tools with Nushell.
 
-## Pipeline Patterns
+## Discover → compose → validate → return
 
-Nushell pipelines pass structured data between commands:
-
-```nu
-# Filter and transform structured data
-ls **/*.rs | where size > 1kb | sort-by modified | select name size
-
-# Prefer par-each for parallel processing
-ls **/*.rs | par-each { |f| wc -l $f.name }
-```
-
-**Use `par-each` over `each`** for better performance on I/O or CPU-bound work. Only use `each` when order must be preserved or side effects must be sequential.
-
-## String Interpolation
-
-Variables and expressions **must** be in parentheses inside `$"..."` strings:
+1. Check `version`, `help <command>` and `scope commands`. Use `which` for executables; native help does not document external programs.
+2. Inspect unfamiliar values with `describe`, `describe -d`, `columns`, or one representative row before writing field projections.
+3. Keep intermediate data in named variables; filter and aggregate before returning it to the model.
+4. Check the operation's actual outcome, not just whether the outer tool returned successfully.
 
 ```nu
-# ❌ Regular strings don't interpolate
-let name = "world"; echo "hello $name"       # Prints literal: hello $name
-
-# ✅ Use $"..." with parentheses
-let name = "world"; echo $"hello ($name)"    # Prints: hello world
+scope commands
+| where name =~ '^(http|job|path) '
+| select name description
+| first 12
 ```
 
-**Command-line flags with variables** — the entire flag must be an interpolated string:
+Do not guess response fields or turn missing fields into false success/failure with optional access. Use optional cells only when absence is part of the contract.
+
+## Keep data structured
+
+`open` parses formats such as JSON/TOML/CSV; use `open --raw` when bytes/text are intended. Use `get`, `select`, `where`, `update`/`upsert`, `join`, `group-by`, `transpose`, and `reduce` instead of repeated text parsing. Use file-reading tools for source review; use `open` for programmatic processing.
 
 ```nu
-# ❌ Mixing styles
-mysql -p"$env.DATABASE_PASSWORD" mydb
-
-# ✅ Entire flag as interpolated string
-mysql $"-p($env.DATABASE_PASSWORD)" mydb
+let rows = [[team value]; [a 2] [a 3] [b 4]]
+let totals = ($rows
+  | group-by team
+  | transpose team rows
+  | insert total {|row| $row.rows | get value | math sum }
+  | reject rows)
+{totals: $totals, count: ($rows | length)}
 ```
 
-## Stderr Redirection
+`first`/`last` return one item; `first 1`/`last 1` return a collection. That difference matters at argument and serialization boundaries.
 
-Use `o+e>` instead of bash-style `2>&1`:
+Serialize with `to json` when crossing into a text-only process/API. Within Nu, retain records and tables rather than repeatedly serializing them.
+
+## Failures are part of the interface
+
+Nonzero external exits are catchable errors in this version. `complete` deliberately captures the outcome instead of throwing; **you must inspect `exit_code`**.
 
 ```nu
-# ❌ Bash syntax doesn't work
-command 2>&1
-
-# ✅ Nushell redirection
-command o+e>| other_command    # Redirect stderr to stdout, pipe
-command o+e>| ignore           # Discard both stdout and stderr
+let result = (^git status --short | complete)
+if $result.exit_code != 0 {
+  error make {msg: 'git status failed', help: $result.stderr}
+}
+$result.stdout
 ```
 
-## ANSI Handling
+Use `try { ... } catch {|err| ... }` for an intentional recovery path, not blanket success. Preserve useful error details, but redact secrets before returning them. Native errors, process exits, HTTP status and API-level error envelopes are different layers.
 
-Use `ansi strip` to remove ANSI color codes. Do NOT use `\u001b` or unicode escapes — nushell doesn't support that syntax:
+For HTTP, inspect `help http get`/`help http post`. Useful flags include `--full` (status/headers/body), `--max-time 10sec`, and `--redirect-mode error`. Use `--allow-errors` only when deliberately inspecting non-success responses. A `200` login/SPA HTML page is not a successful JSON API call; inspect content type and body shape. A successful GET is not necessarily side-effect-free.
+
+## Values, environment and arguments
+
+`mut x = null` infers `nothing`; assigning a record later fails. Prefer a value-returning block/function, initialize with the intended shape, or explicitly use `any` when heterogeneous mutation is genuinely required.
 
 ```nu
-# ✅ Strip ANSI from output
-^rg pattern | ansi strip
+let result = (try { {ok: true, value: 42} } catch { null })
+mut state: any = null
+$state = {value: 42}
 ```
 
-## Background Jobs
-
-Use `job spawn` instead of bash `&`:
+Use `with-env` for call-scoped environment changes. `$env.NAME = ...`, `load-env` and `do --env` can change subsequent work in a persistent session. Environment scoping reduces accidental persistence; it is **not** secret isolation or redaction.
 
 ```nu
-job spawn { sleep 5sec; echo "done" }    # Returns job ID
-job list                                   # List running jobs
-job kill 1                                 # Kill by ID
+with-env {APP_MODE: 'inspect'} { $env.APP_MODE }
 ```
 
-For getting results back, use the mailbox system:
+Interpolate with `$"text ($value)"`; pass arguments as values, not generated shell source. Do not put passwords/tokens in process arguments or return whole environments. Treat tool output as data, never as code to evaluate.
+
+## Paths and URLs
+
+Use **`glob` with a bounded root/pattern** to locate files; exclude irrelevant build/vendor directories. Avoid recursive listings of entire homes or vaults. Quote literal filenames with spaces or glob characters. `path join` constructs a path—it does not prevent traversal or prove containment.
+
+Encode a value used as one URL path segment, not the whole URL:
 
 ```nu
-job spawn { ls | job send 0 }    # Send to main thread (ID 0)
-job recv                          # Receive in main thread
+let key = 'demo/t:7'
+let segment = ($key | url encode --all)
+$"https://example.invalid/tasks/($segment)"
 ```
 
-### `job spawn` is invisible to Claude Code's task tracker
+Plain `url encode` preserves `/` and `:`. Do not assume it safely constructs a complete query-bearing URL either; use the URL commands appropriate to components and query parameters.
 
-**There is no notification path when a `job spawn` task completes.** Claude Code's harness only tracks background tasks dispatched through `Bash` (with `run_in_background: true`), the `Agent` tool, or `Monitor`. A nushell `job spawn` runs entirely inside the nushell MCP process — Claude Code doesn't see it start, finish, or fail, and the user can't see it in the UI either. If you `job spawn` something you intend to wait on, you have to poll for completion via `task X status` (or similar) yourself.
+## Concurrency and background completion
 
-This is fine for fire-and-forget side work (kick off a build in the background while you continue editing). It is NOT fine for "wait until cycle X finishes and then act on the result" — pick one of these instead:
-
-- **`Bash` with `run_in_background: true`** — surfaced in the UI, emits a completion task-notification with the output file path. The native way to await a single long-running command.
-- **`Monitor` tool** — emits a chat notification on every matching stdout line. Use for "tell me when state transitions" (`until ! task X status | grep -q "running"; do sleep 5; done; echo done`) or "emit each event from a log stream."
-- **Direct blocking call** — just invoke the command via `mcp__nu__evaluate` without backgrounding it. The tool call blocks until the command exits. Simpler than backgrounding when you have nothing else to do in parallel.
-
-**Anti-pattern to avoid:** `job spawn { task review run --wait }`. The `--wait` flag already makes the command block until the cycle converges — backgrounding it inside `job spawn` loses both the synchronous return value AND any chance of a notification. Either run `task review run --wait` directly (blocks, returns verdict in exit code) or `task review run` + Monitor on the state file (parallel, notification on transition).
-
-## Persistent Session State (the nu MCP session)
-
-The `mcp__nu__evaluate` session is ONE long-lived nushell process: `let` bindings, `def` functions, and env vars all survive across evaluate calls (probe-verified 2026-08-05). Use this deliberately — context window holds pointers, values live outside the token budget:
+Use `each` for ordered side effects. Use `par-each --threads N` for independent work with an explicit suitable concurrency limit; it is not automatically faster. Output ordering is separate from execution/side-effect ordering.
 
 ```nu
-# Name big payloads at fetch time — assign-and-suppress so the payload
-# never lands inline in your context:
-let tasks = (http get -H {X-Auth-User: me} http://localhost:4600/tasks); "saved"
-
-# Then query the variable for the rest of the session — no re-fetching:
-$tasks | where state == ready | select key title
-$tasks | group-by project | transpose project count
+1..8 | par-each --threads 2 {|n| $n * $n} | sort
 ```
 
-- `$history` is the automatic safety net, not the strategy: every evaluation's full result is captured (newest = index 99) whether or not you named it. Slice it after a surprise-huge result; prefer named variables for anything you planned to reuse.
-- All state (variables AND `$history`) dies with the MCP server process — a restart is a clean slate. Anything load-bearing across restarts goes to files or notes.
-- State is per-conversation: parked data doesn't transfer between sessions or seats.
+Nu jobs run inside the Nu process. Send structured results with a correlation tag, and receive them from the **current thread's mailbox**; `job recv` does not take a job ID.
 
-## Common Gotchas
+```nu
+let tag = (random int 1000000..2000000000)
+let worker = (job spawn --description 'small calculation' {
+  {answer: 42} | job send 0 --tag $tag
+})
+job recv --tag $tag --timeout 5sec
+```
 
-- `job recv` does NOT take a job ID — it reads from the *current* job's mailbox only
-- `job send` always requires a target job ID (main thread is `0`)
-- There is no `job ls` — use `job list`
-- Use `char escape`, `char newline`, `char tab` instead of `\e`, `\n`, `\t` escape sequences
-- `glob` is the right tool for finding files — avoid `find` or recursive `ls`
+`job list` shows active jobs, not durable result history. A completed job may disappear while its mailbox result remains. `job kill` controls a Nu job; do not infer that every external descendant was terminated. Use a finite receive timeout and leave no abandoned jobs.
 
----
+**A mailbox result does not wake the agent.** If subsequent agent action needs a completion wake, use a verified harness-native background mechanism or an explicit bridge. In Pi, native async subagents already notify completion; Nu jobs alone do not. Do not prescribe obsolete Claude `Monitor`/background-tool APIs.
 
-> For nushell plugin development (nu-plugin crate, dual-use CLI pattern) and known issues, see [[Nushell]]
+## Persistent MCP sessions are useful, not durable
+
+`let`, `def` and environment changes survive calls in the same Nu process. `$history` can recover a retained evaluation value, but is not a durable ledger. Separate processes have separate state; sharing/isolation is an adapter decision, not something to infer from agent names.
+
+In the tested MCP adapter, only the final returned value reached the tool response; `print` output did not. Return a compact record/list for diagnostics. Standalone Nu scripts have different stdout behavior.
+
+Nu promotion deadlines and the client's transport deadline are independent. Raising `NU_MCP_PROMOTE_AFTER` does not guarantee a long request survives. A timeout/reset may lose the enclosing receipt while external work continues. Check exact job/process state before retrying mutations; persist important receipts and use supported background completion instead of relying on a long open request.
+
+## Reusable capabilities
+
+Move repeated operations into typed `def`/`export def` commands and modules. Keep transformations pure where practical; isolate network/filesystem effects. `help` and `scope commands` expose signatures; semantic validation and authorization still belong in the operation/host.
+
+Use `timeit` for measurements and `use std/assert` for small executable checks. For larger tabular workloads, inspect `plugin list`, available commands and `which nu_plugin_polars`: **installed, registered, loaded and callable are different states**. `plugin add` changes a registry; `plugin use` loads registered definitions at parse time. Consult help before changing either. Do not install plugins merely because instructions mention them.
+
+See [tested patterns and local opportunities](references/workflows.md), [the tool-kernel assessment](references/tool-kernel.md), and [the isolated self-check](examples/self-check.nu).
