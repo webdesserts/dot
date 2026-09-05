@@ -6,45 +6,78 @@
  * unnecessary: Pi reloads extensions without discarding the conversation.
  * Delivery policy belongs to Autonomy, not this process supervisor.
  *
- * Bounded continuation mode (opt-in, session-local):
+ * Goal heartbeat mode (opt-in, session-owned):
  *
  *   A model-callable tool (`heartbeat_control`) and a human command (`/hb`)
- *   share the SAME supervisor-owned control state: enable / pause / status.
- *   `enable` records a next-action context pointer (safe fallback text when
- *   omitted), an idle delay (default two minutes, clamped 5s..1h) and a wake
- *   budget (default three, hard cap ten per enable). While enabled, idle
- *   transitions arm the worker's single delayed timer — an agent_end, an
- *   enable issued while already idle, or a crash replay while idle all arm;
- *   no per-turn re-arming tool call is needed. The supervisor owns the
- *   remaining budget: it decrements BEFORE delivering a heartbeat and
- *   re-checks generation, busy/shutdown/paused/budget at delivery time, so
- *   late or stale worker output is dropped. After a worker crash the state
- *   is replayed to the respawned worker, so a respawn never replenishes
- *   budget — and if the parent was idle at crash time, the replay arms the
- *   timer (a crash while idle may otherwise never see another agent_end).
+ *   share the SAME supervisor-owned control state: enable / hold / complete /
+ *   pause / status.
  *
- *   Generation fence: every control transition (enable, pause) and every
- *   lifecycle forward (agent_start, agent_end) bumps a supervisor-owned
- *   generation that travels to the worker and is echoed on heartbeat
- *   responses. Heartbeats whose generation no longer matches — a legacy
- *   beat queued before an enable, a continuation beat from before a
- *   re-enable, a prior idle cycle's output arriving after a newer cycle —
- *   are rejected before any budget decrement or delivery.
+ *   enable — records ONE active goal pointer (a non-empty nextAction is
+ *   required; an empty string never invents indefinite work), plus an idle
+ *   delay (default 30s, clamped 5s..1h). There is NO wake-count expiry: the
+ *   goal wakes on every idle transition until it is explicitly completed or
+ *   paused. The retired per-enable wake budget is gone from schema, guidance
+ *   and status rather than being silently treated as infinite.
+ *
+ *   hold — defers heartbeats until an explicit absolute deadline (epoch ms,
+ *   derived from a finite positive holdSeconds, e.g. holdSeconds 300). Hold
+ *   is heartbeat-only: ordinary notifications, human messages and native
+ *   child completion are never blocked. A busy run is never interrupted —
+ *   the next wake is scheduled no earlier than BOTH the normal idle delay
+ *   and the hold deadline, and hold resumes automatically without a
+ *   re-enable. Hold while all-paused is rejected rather than silently
+ *   reactivating wakes.
+ *
+ *   complete — ends the goal and enters the bounded ambient fallback. The
+ *   tool result itself carries the handoff prompt (check for another
+ *   authorized goal, keep the fallback, or pause); no second self-triggering
+ *   message is sent. Repeated complete with no active goal never renews the
+ *   ambient lifetime, and complete while paused never re-enables ambient.
+ *
+ *   Ambient fallback — 30-minute idle checks with a FIXED 2h expiry measured
+ *   from entering ambient. Its own wakes, model replies, holds and worker
+ *   crashes cannot extend the deadline: the worker never schedules a timer
+ *   past the expiry and the supervisor re-checks the deadline at delivery.
+ *   After expiry heartbeats stop. Completing another genuinely active goal
+ *   starts a new fallback window.
+ *
+ *   pause — all heartbeat wakes off, ambient included, until an explicit
+ *   enable. Human/ordinary notifications are unaffected.
+ *
+ *   status — truthful mode, goal pointer, delay, hold deadline, ambient
+ *   expiry/expired state and suppression reasons. It never claims a
+ *   next-due time while busy or paused and carries no wake-count counter.
+ *
+ *   While a goal is active, idle transitions arm the worker's single delayed
+ *   timer — an agent_end, an enable issued while already idle, or a crash
+ *   replay while idle all arm; no per-turn re-arming tool call is needed.
+ *
+ *   Generation fence: every control transition (enable, hold, complete,
+ *   pause) and every lifecycle forward (agent_start, agent_end) bumps a
+ *   supervisor-owned generation that travels to the worker and is echoed on
+ *   heartbeat responses. Heartbeats whose generation no longer matches — a
+ *   queued beat from before a transition, or a prior idle cycle's output
+ *   arriving after a newer cycle — are rejected before delivery.
  *
  *   Delivery idleness: the supervisor stores the current session context
  *   and re-checks its documented isIdle() at heartbeat delivery, failing
  *   closed (no delivery) when unavailable or when retry/compaction/queued
  *   continuation is in progress. A transient-busy check defers through the
- *   worker's existing full-delay timer without consuming budget, so manual
- *   compaction need not produce another agent run for waking to recover.
+ *   worker's existing full-delay timer, so manual compaction need not
+ *   produce another agent run for waking to recover.
  *
- *   States: "legacy" (default — the original behavior with its active
- *   30-minute fallback), "continuation" (bounded wakes with the supplied
- *   context), "paused" (all heartbeat wakes silenced, legacy included,
- *   until enabled again). Per extensions.md, /reload and session
- *   replacement emit session_shutdown for the old runtime and bind a fresh
- *   extension instance, so this in-memory state ends with the session and
- *   a new session starts in legacy mode — nothing persists automatically.
+ *   Persistence: state TRANSITIONS (enable, hold, complete, pause) are
+ *   written as Pi custom entries (pi.appendEntry, customType
+ *   "heartbeat-control") so same-session reload/resume keeps the explicit
+ *   goal/mode and absolute deadlines. Restore on session_start reads the
+ *   latest VALID control entry across getEntries() for this session
+ *   identity — control intent is session-wide, so a newer pause/complete can
+ *   never be resurrected into a goal by navigating to an older tree branch
+ *   and reloading. Forks and brand-new sessions do NOT inherit the old
+ *   owner's active goal: they start a fresh bounded ambient window. Absolute
+ *   deadlines (hold, ambient expiry) persist as epoch ms and are never
+ *   renewed by a reload. Ephemeral/in-memory sessions degrade gracefully:
+ *   appendEntry failures are logged, never fatal.
  *
  *   Notification (wake) delivery is unaffected by any of this.
  */
@@ -61,33 +94,46 @@ const WORKER_PATH = path.join(
 );
 const RESPAWN_DELAY_MS = 2_000;
 
-const DEFAULT_IDLE_DELAY_MS = 2 * 60_000;
-const DEFAULT_WAKE_BUDGET = 3;
-const MAX_WAKE_BUDGET = 10;
+const DEFAULT_IDLE_DELAY_MS = 30_000;
 const MIN_IDLE_DELAY_MS = 5_000;
 // Finite maximum: Node clamps setTimeout delays above 2^31-1ms down to 1ms,
 // which would turn a "slow" heartbeat into a hot loop.
 const MAX_IDLE_DELAY_MS = 3_600_000;
-// Safe documented fallback so an enable without a next action can never
-// produce an empty reminder.
-const FALLBACK_NEXT_ACTION =
-	"(no next action was provided — inspect this session's approved work, " +
-	"continue one safe unblocked step, or pause the heartbeat)";
+// Fixed ambient fallback window, measured from entering ambient. Nothing in
+// the system may extend it — not its own wakes, not a reload, not a hold.
+const AMBIENT_LIFETIME_MS = 2 * 3_600_000;
+const MIN_HOLD_MS = 1_000;
+// Custom-entry type used for session-owned control persistence.
+const ENTRY_TYPE = "heartbeat-control";
+// Exact handoff prompt delivered in the complete tool result. Deliberately
+// NOT sent as a second self-triggering user message.
+const COMPLETE_HANDOFF =
+	"Goal complete. Is there another authorized goal you can work on? " +
+	"If so, enable it and continue. Otherwise leave the bounded fallback " +
+	"active, or pause all wakes for a human wait.";
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const isFiniteMs = (value) => {
+	const n = Number(value);
+	return Number.isFinite(n) && n > 0 ? n : 0;
+};
 
 export default function (pi) {
 	// pi-subagents marks its background runtime explicitly; session_start does
 	// not carry the systemPromptOptions used by before_agent_start.
 	if (process.env.PI_SUBAGENT_CHILD === "1") return;
 
-	// ── continuation control state (session-local, supervisor-owned) ──
-	let mode = "legacy";
+	// ── goal heartbeat control state (session-owned, supervisor-owned) ──
+	let mode = "ambient";
+	let goal = "";
 	let idleDelayMs = DEFAULT_IDLE_DELAY_MS;
-	let contextText = "";
-	let remainingWakes = 0;
-	// Control/lifecycle generation: bumped on enable, pause, agent_start and
-	// agent_end; echoed by the worker on heartbeat responses.
+	// Absolute epoch-ms deadlines. Absolute (not relative) so they survive
+	// reload/resume without being silently renewed.
+	let holdUntil = 0;
+	let ambientExpiresAt = Date.now() + AMBIENT_LIFETIME_MS;
+	// Control/lifecycle generation: bumped on enable, hold, complete, pause,
+	// agent_start and agent_end; echoed by the worker on heartbeat responses.
 	let generation = 0;
 
 	let running = false;
@@ -121,15 +167,51 @@ export default function (pi) {
 		}
 	};
 
+	// Session identity for ownership binding: control entries written by this
+	// runtime are only valid for the session that wrote them. A fork copies
+	// the parent's entries into a new file, but they keep the OLD owner id and
+	// must never restore here.
+	const sessionOwner = (ctx = currentCtx) => {
+		try {
+			const id = ctx?.sessionManager?.getSessionId?.();
+			return typeof id === "string" && id ? id : null;
+		} catch {
+			return null;
+		}
+	};
+
+	// Persist a control-state transition (or a session's fresh baseline) as a
+	// custom entry bound to this session's identity. Transitions only — never
+	// polls, never status. Custom entries do not enter LLM context and are
+	// read back by scanning getEntries() for the latest valid owned snapshot.
+	const persist = () => {
+		try {
+			pi.appendEntry(ENTRY_TYPE, {
+				owner: sessionOwner(),
+				mode,
+				goal,
+				idleDelayMs,
+				holdUntil,
+				ambientExpiresAt,
+				at: Date.now(),
+			});
+		} catch (err) {
+			// Ephemeral/in-memory sessions may not persist; heartbeating still
+			// works from in-memory state.
+			console.error(`[notifications] persist failed: ${err}`);
+		}
+	};
+
 	// Full control snapshot, replayed to a freshly spawned worker so a crash
-	// respawn resumes the same mode/budget instead of replenishing it.
+	// respawn resumes the same mode/goal/deadlines instead of starting over.
 	const workerInit = () => ({
 		event: "init",
 		busy,
 		mode,
 		idleDelayMs,
-		context: contextText,
-		remaining: remainingWakes,
+		goal,
+		holdUntil,
+		ambientExpiresAt,
 		generation,
 	});
 
@@ -137,65 +219,152 @@ export default function (pi) {
 		mode,
 		busy,
 		idleDelayMs,
-		remainingWakes,
-		nextAction: contextText,
+		goal,
+		holdUntil,
+		ambientExpiresAt,
+		ambientExpired: mode === "ambient" && ambientExpiresAt < Date.now(),
 		generation,
 	});
 
-	const sanitizeNextAction = (value) => {
-		const text = String(value ?? "").trim();
-		return text || FALLBACK_NEXT_ACTION;
+	const fmtTime = (ms) => new Date(ms).toISOString();
+
+	const formatState = (state) => {
+		const busyTag = state.busy ? " (busy — wakes resume when idle)" : "";
+		if (state.mode === "goal") {
+			let line = `heartbeat goal${busyTag} — idle ${Math.round(state.idleDelayMs / 1000)}s`;
+			if (state.holdUntil > Date.now()) line += ` — held until ${fmtTime(state.holdUntil)}`;
+			else if (!state.busy) line += ` — next wake: after ${Math.round(state.idleDelayMs / 1000)}s idle`;
+			line += ` — next: ${state.goal}`;
+			return line;
+		}
+		if (state.mode === "ambient") {
+			const busyTag = state.busy ? " (busy — wakes resume when idle)" : "";
+			if (state.ambientExpired) return `heartbeat ambient${busyTag} — 2h fallback window EXPIRED; no further fallback wakes (enable a goal to resume)`;
+			let line = `heartbeat ambient${busyTag} — 30-minute fallback, expires ${fmtTime(state.ambientExpiresAt)} (fixed; not extended by its own wakes)`;
+			if (state.holdUntil > Date.now()) line += ` — held until ${fmtTime(state.holdUntil)}`;
+			return line;
+		}
+		return "heartbeat paused — all heartbeat wakes silenced (ordinary notifications unaffected); enable a goal to resume";
+	};
+
+	// Restore the latest VALID control entry for this session identity,
+	// scanning all entries (not just the current branch): control intent is
+	// session-wide, so navigating to an older branch cannot resurrect a
+	// superseded goal over a newer pause/complete. Invalid snapshots (unknown
+	// mode, goal mode with an empty pointer) are skipped, not repaired.
+	const restoreFromSession = (ctx) => {
+		try {
+			const self = sessionOwner(ctx);
+			const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const entry = entries[i];
+				if (entry?.type !== "custom" || entry?.customType !== ENTRY_TYPE) continue;
+				const data = entry?.data;
+				if (!data || typeof data !== "object") continue;
+				if (data.owner !== self) continue; // another session's entries never own this runtime
+				if (data.mode === "goal" && typeof data.goal === "string" && data.goal.trim()) {
+					mode = "goal";
+					goal = data.goal.trim();
+					idleDelayMs = clamp(isFiniteMs(data.idleDelayMs) || DEFAULT_IDLE_DELAY_MS, MIN_IDLE_DELAY_MS, MAX_IDLE_DELAY_MS);
+					holdUntil = isFiniteMs(data.holdUntil);
+					ambientExpiresAt = 0;
+					return true;
+				}
+				if (data.mode === "ambient" || data.mode === "paused") {
+					mode = data.mode;
+					goal = "";
+					holdUntil = isFiniteMs(data.holdUntil);
+					ambientExpiresAt = data.mode === "ambient" ? isFiniteMs(data.ambientExpiresAt) : 0;
+					return true;
+				}
+			}
+		} catch (err) {
+			console.error(`[notifications] restore failed: ${err}`);
+			return false;
+		}
+		// No usable history (or the entry scan failed): fresh bounded ambient,
+		// persisted so a later reload restores the SAME window, not a new one.
+		return false;
+	};
+
+	// Fresh sessions and forks never inherit an active goal; they may start a
+	// new bounded ambient window.
+	const freshAmbient = () => {
+		mode = "ambient";
+		goal = "";
+		holdUntil = 0;
+		ambientExpiresAt = Date.now() + AMBIENT_LIFETIME_MS;
 	};
 
 	// Single control path shared by the model tool and the human command.
 	const control = (action, args = {}, ctx = null) => {
+		if (args && args.wakeBudget !== undefined) {
+			// Retired concept: an old finite-budget request must fail
+			// explicitly rather than silently become an unlimited goal.
+			return { ok: false, state: statusState(), error: "wakeBudget is retired: goal heartbeats have no count expiry; remove wakeBudget and call again" };
+		}
 		if (action === "enable") {
+			const pointer = typeof args.nextAction === "string" ? args.nextAction.trim() : "";
+			if (!pointer) {
+				return { ok: false, state: statusState(), error: "enable requires a non-empty nextAction naming the approved goal (an empty goal must not become indefinite work)" };
+			}
 			const delaySeconds = Number(args.idleDelaySeconds);
-			const budget = Number(args.wakeBudget);
-			mode = "continuation";
+			mode = "goal";
+			goal = pointer;
 			idleDelayMs = clamp(
 				Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds * 1000 : DEFAULT_IDLE_DELAY_MS,
 				MIN_IDLE_DELAY_MS,
 				MAX_IDLE_DELAY_MS,
 			);
-			contextText = sanitizeNextAction(args.nextAction);
-			remainingWakes = clamp(
-				Number.isFinite(budget) && budget > 0 ? Math.floor(budget) : DEFAULT_WAKE_BUDGET,
-				1,
-				MAX_WAKE_BUDGET,
-			);
+			holdUntil = 0; // a fresh goal starts unheld
 			generation += 1;
+			persist();
 			// The worker arms here when the session is already idle: a command
 			// issued while idle is never followed by an agent_end of its own.
 			const busyAtEnable = busy || (ctx !== null && typeof ctx.isIdle === "function" && ctx.isIdle() === false);
-			sendToWorker({
-				event: "enable",
-				idleDelayMs,
-				context: contextText,
-				remaining: remainingWakes,
-				busy: busyAtEnable,
-				generation,
-			});
+			sendToWorker({ event: "enable", idleDelayMs, goal, busy: busyAtEnable, generation });
+		} else if (action === "hold") {
+			if (mode === "paused") {
+				return { ok: false, state: statusState(), error: "hold rejected: all wakes are paused (enable first, then hold)" };
+			}
+			const seconds = Number(args.holdSeconds);
+			if (!Number.isFinite(seconds) || seconds <= 0) {
+				return { ok: false, state: statusState(), error: "hold requires a positive finite holdSeconds (e.g. 300)" };
+			}
+			const ms = clamp(seconds * 1000, MIN_HOLD_MS, MAX_IDLE_DELAY_MS);
+			holdUntil = Date.now() + ms;
+			generation += 1;
+			persist();
+			sendToWorker({ event: "hold", holdUntil, generation });
+		} else if (action === "complete") {
+			if (mode !== "goal") {
+				// Never renew ambient from an empty completion, and never sneak a
+				// paused session back into waking.
+				const note = mode === "paused"
+					? "No active goal (paused): nothing completed, ambient stays off."
+					: "No active goal: the ambient window is unchanged and was not renewed.";
+				return { ok: true, state: statusState(), message: note };
+			}
+			mode = "ambient";
+			goal = "";
+			holdUntil = 0;
+			ambientExpiresAt = Date.now() + AMBIENT_LIFETIME_MS;
+			generation += 1;
+			persist();
+			sendToWorker({ event: "complete", ambientExpiresAt, generation });
+			return { ok: true, state: statusState(), message: COMPLETE_HANDOFF };
 		} else if (action === "pause") {
 			mode = "paused";
-			remainingWakes = 0;
+			goal = "";
+			holdUntil = 0;
 			generation += 1;
+			persist();
 			sendToWorker({ event: "pause", generation });
 		} else if (action !== "status") {
 			return { ok: false, state: statusState(), error: `unknown action: ${action}` };
 		}
 		return { ok: true, state: statusState() };
 	};
-
-	const formatState = (state) =>
-		`heartbeat ${state.mode}${state.busy ? " (busy)" : ""}` +
-		(state.mode === "continuation"
-			? ` — ${state.remainingWakes} wake(s) left, idle ${Math.round(state.idleDelayMs / 1000)}s` +
-				(state.nextAction ? ` — next: ${state.nextAction}` : "")
-			: "") +
-		(state.mode === "legacy"
-			? " — 30-minute fallback active; enable continuation for bounded idle wakes"
-			: "");
 
 	const spawnWorker = () => {
 		if (!running || child) return;
@@ -204,7 +373,7 @@ export default function (pi) {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		child = spawned;
-		// Replay control state (mode, delay, context, remaining budget,
+		// Replay control state (mode, goal, delay, absolute deadlines,
 		// generation) and the current busy/idle snapshot so the fresh worker
 		// matches reality — and arms itself when the parent was idle.
 		sendToWorker(workerInit());
@@ -252,31 +421,54 @@ export default function (pi) {
 		if (!running) return; // session shut down
 		if (heartbeatGeneration !== generation) return; // stale control/lifecycle era
 		if (busy) return;
+		if (mode === "paused") return; // silenced until explicitly enabled again
 		if (!idleNow()) {
 			// Manual compaction can finish without another agent run. Retry via
 			// the worker's existing full-delay timer, never queue a busy wake.
-			if (mode === "continuation" && remainingWakes > 0) {
-				sendToWorker({ event: "heartbeat_defer", generation });
-			}
+			sendToWorker({ event: "heartbeat_defer", generation });
 			return;
 		}
-		if (mode === "paused") return; // silenced until explicitly enabled again
-		if (mode === "continuation") {
-			if (remainingWakes <= 0) return;
-			remainingWakes -= 1; // supervisor owns the budget: decrement BEFORE delivery
-			if (remainingWakes === 0) sendToWorker({ event: "budget", remaining: 0 });
+		// A hold is honored at DELIVERY time too: a current-generation beat
+		// whose output lands before the deadline defers through the worker's
+		// timer (which already schedules no earlier than the hold deadline)
+		// instead of bypassing the hold.
+		if (holdUntil > Date.now()) {
+			sendToWorker({ event: "heartbeat_defer", generation });
+			return;
 		}
-		send(message);
+		if (mode === "goal") {
+			send(message);
+			return;
+		}
+		if (mode === "ambient") {
+			// Fixed expiry: a beat armed before expiry is still dropped when it
+			// would be delivered past it, and nothing re-arms after expiry.
+			if (Date.now() > ambientExpiresAt) return;
+			send(message);
+		}
 	};
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", (event, ctx) => {
 		if (running) return;
 		running = true;
-		// Fresh extension instance: control state already defaults to legacy
-		// (whose 30-minute fallback is active). Snapshot idleness from
-		// documented Pi context (ctx.isIdle) instead of any worker fallback.
+		// Snapshot idleness from documented Pi context (ctx.isIdle).
 		currentCtx = ctx ?? null;
 		busy = !(ctx?.isIdle?.() ?? true);
+		const reason = event?.reason;
+		let restored = false;
+		if (reason === "fork" || reason === "new") {
+			// Forks and brand-new sessions must not inherit the previous
+			// owner's active goal; they start a fresh bounded ambient window.
+			freshAmbient();
+		} else {
+			restored = restoreFromSession(ctx);
+		}
+		if (!restored) {
+			// A fresh session persists its ambient baseline immediately so a
+			// later reload restores the same absolute expiry instead of
+			// renewing it.
+			persist();
+		}
 		spawnWorker();
 	});
 	pi.on("session_shutdown", () => {
@@ -286,11 +478,12 @@ export default function (pi) {
 		const stopped = child;
 		child = null;
 		stopped?.kill();
-		// Control state is session-local: reset to safe defaults. A later
-		// session_start in this instance starts in legacy mode.
-		mode = "legacy";
-		remainingWakes = 0;
-		contextText = "";
+		// In-memory control state ends with this instance; durable intent was
+		// persisted as custom entries and is restored by the next instance.
+		mode = "ambient";
+		goal = "";
+		holdUntil = 0;
+		ambientExpiresAt = Date.now() + AMBIENT_LIFETIME_MS;
 		busy = false;
 		generation = 0;
 		currentCtx = null;
@@ -309,32 +502,39 @@ export default function (pi) {
 		name: "heartbeat_control",
 		label: "Heartbeat Control",
 		description:
-			"Control the bounded idle continuation heartbeat for this session. " +
-			"enable: arm automatic idle wakes that remind you to continue the current approved work; " +
-			"pass a concise nextAction — when omitted, a documented fallback reminder is used. " +
-			"pause: silence all heartbeat wakes (including legacy) until enabled again — use this when " +
-			"blocked, waiting on a human, or finished. status: report mode, remaining wake budget and delay.",
-		promptSnippet: "Enable/pause/inspect the session's bounded continuation heartbeat",
+			"Control the goal heartbeat for this session. " +
+			"enable: arm idle wakes for ONE approved goal until it is explicitly completed or paused — pass a concise nextAction naming the goal (required; empty is rejected). " +
+			"hold: defer heartbeat wakes until now + holdSeconds (absolute deadline; ordinary notifications unaffected; auto-resumes). " +
+			"complete: end the active goal and enter the bounded ambient fallback (30-minute checks, fixed 2h expiry). " +
+			"pause: silence all heartbeat wakes (including ambient) until enabled again — use this when blocked, waiting on a human, or fully stopped. " +
+			"status: report mode, goal, delay, hold deadline, fallback expiry and suppression reasons.",
+		promptSnippet: "Enable/hold/complete/pause/inspect the session's goal heartbeat",
 		promptGuidelines: [
-			"Use heartbeat_control enable once at the start of a work period with a concise nextAction describing the approved next step; idle wakes then re-arm automatically after every turn — do not call it again each turn.",
-			"If a heartbeat finds you genuinely blocked, waiting on human input, or done, call heartbeat_control pause and report the blocker instead of inventing work or authority.",
+			"Use heartbeat_control enable once at the start of an approved goal with a concise nextAction describing it; idle wakes then re-arm automatically after every turn with no wake-count limit — do not call it again each turn.",
+			"Use heartbeat_control hold for a known finite wait instead of letting heartbeats fire into a busy or deliberately deferred period.",
+			"When the approved goal is genuinely done, call heartbeat_control complete and follow its handoff prompt; if blocked, waiting on a human, or stopping, call heartbeat_control pause and report the blocker — never invent work or authority.",
 		],
 		parameters: Type.Object({
-			action: StringEnum(["enable", "pause", "status"] as const),
+			action: StringEnum(["enable", "hold", "complete", "pause", "status"] as const),
 			nextAction: Type.Optional(
-				Type.String({ description: "Concise approved next action / context pointer quoted in every heartbeat reminder" }),
+				Type.String({ description: "Required for enable: concise approved goal / next-action pointer quoted in every heartbeat" }),
 			),
 			idleDelaySeconds: Type.Optional(
-				Type.Integer({ minimum: 5, maximum: 3600, description: "Idle delay before each heartbeat (default 120, max 3600)" }),
+				Type.Integer({ minimum: 5, maximum: 3600, description: "Idle delay before each goal heartbeat (default 30, max 3600)" }),
 			),
-			wakeBudget: Type.Optional(
-				Type.Integer({ minimum: 1, maximum: 10, description: "Max heartbeats per enable (default 3, hard cap 10)" }),
+			holdSeconds: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 3600, description: "For hold: defer heartbeats until now + holdSeconds (e.g. 300)" }),
 			),
-		}),
+		}, { additionalProperties: false }),
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 			const result = control(params.action, params, ctx);
+			const text = result.ok
+				? result.message
+					? `${result.message}\n${formatState(result.state)}`
+					: formatState(result.state)
+				: result.error;
 			return {
-				content: [{ type: "text", text: result.ok ? formatState(result.state) : result.error }],
+				content: [{ type: "text", text }],
 				details: result,
 			};
 		},
@@ -343,8 +543,8 @@ export default function (pi) {
 	// ── human command sharing the same control state ──
 	pi.registerCommand("hb", {
 		description:
-			"Bounded continuation heartbeat: /hb enable <next action> | /hb pause | /hb status " +
-			"(enable without text uses a documented fallback reminder)",
+			"Goal heartbeat: /hb enable <next action> | /hb hold <seconds> | /hb complete | /hb pause | /hb status " +
+			"(enable requires a non-empty next action)",
 		handler: async (args, ctx) => {
 			const text = (args ?? "").trim();
 			const verb = text.split(/\s+/)[0] ?? "";
@@ -352,12 +552,22 @@ export default function (pi) {
 			let result;
 			if (verb === "enable") {
 				result = control("enable", rest ? { nextAction: rest } : {}, ctx);
-			} else if (verb === "pause" || verb === "status") {
+			} else if (verb === "hold") {
+				result = control("hold", { holdSeconds: Number(rest) });
+			} else if (verb === "complete" || verb === "pause" || verb === "status") {
 				result = control(verb);
 			} else {
-				result = { ok: false, state: statusState(), error: "usage: /hb enable <next action> | /hb pause | /hb status" };
+				result = {
+					ok: false,
+					state: statusState(),
+					error: "usage: /hb enable <next action> | /hb hold <seconds> | /hb complete | /hb pause | /hb status",
+				};
 			}
-			const line = result.ok ? formatState(result.state) : result.error;
+			const line = result.ok
+				? result.message
+					? `${result.message} — ${formatState(result.state)}`
+					: formatState(result.state)
+				: result.error;
 			try {
 				ctx?.ui?.notify?.(line, result.ok ? "info" : "warning");
 			} catch {

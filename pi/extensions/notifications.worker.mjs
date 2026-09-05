@@ -31,41 +31,48 @@
  * PROTOCOL:
  *   stdin  (from supervisor): JSON lines
  *     {"event": "agent_start"|"agent_end", "generation": n}
- *     {"event": "init",   "busy": bool, "mode": "legacy"|"continuation"|"paused",
- *      "idleDelayMs": n, "context": "...", "remaining": n, "generation": n}
- *     {"event": "enable", "idleDelayMs": n, "context": "...", "remaining": n,
- *      "busy": bool, "generation": n}
- *     {"event": "budget", "remaining": n}
+ *     {"event": "init", "busy": bool, "mode": "goal"|"ambient"|"paused",
+ *      "idleDelayMs": n, "goal": "...", "holdUntil": epochMs,
+ *      "ambientExpiresAt": epochMs, "generation": n}
+ *     {"event": "enable", "idleDelayMs": n, "goal": "...", "busy": bool,
+ *      "generation": n}
+ *     {"event": "hold", "holdUntil": epochMs, "generation": n}
+ *     {"event": "complete", "ambientExpiresAt": epochMs, "generation": n}
  *     {"event": "pause",  "generation": n}
  *   stdout (to supervisor):  JSON lines
  *     {"kind": "wake", "message": "..."}
  *     {"kind": "heartbeat", "message": "...", "generation": n}
  *
- * HEARTBEAT MODES (session-local; the supervisor owns the wake budget):
- *   legacy        — default. Original behavior: a 10s fallback arms the idle
- *                   heartbeat (AUTONOMY_HEARTBEAT_MS, default 30min, fixed
- *                   canned text) and every agent_end re-arms it. Kept for
- *                   sessions that never enable continuation.
- *   continuation  — bounded continuation: the timer is armed on every idle
- *                   transition — agent_end, an enable issued while already
- *                   idle, or a crash replay (init) while idle — while budget
- *                   remains. The 10s fallback NEVER runs in this mode; the
- *                   busy/idle snapshot comes from the supervisor (init/enable
- *                   "busy" field), so a heartbeat cannot arm mid-turn.
- *   paused        — all heartbeat wakes silenced (legacy included) until the
- *                   supervisor enables again.
+ * HEARTBEAT MODES (session-local; the supervisor owns control state):
+ *   goal     — active goal: the timer is armed on every idle transition —
+ *              agent_end, an enable issued while already idle, or a crash
+ *              replay (init) while idle. No wake-count expiry: the goal
+ *              wakes until explicitly completed or paused. The busy/idle
+ *              snapshot comes from the supervisor (init/enable "busy"
+ *              field), so a heartbeat cannot arm mid-turn.
+ *   ambient  — bounded fallback: 30-minute idle checks (AUTONOMY_HEARTBEAT_MS)
+ *              that NEVER fire past the fixed ambientExpiresAt deadline. Its
+ *              own wakes, replies, holds and worker crashes cannot extend the
+ *              expiry; once past it, no timer is scheduled and beats stop.
+ *   paused   — all heartbeat wakes silenced until the supervisor enables
+ *              again.
+ *
+ * HOLD: a heartbeat-only deferral. While holdUntil (absolute epoch ms) is in
+ * the future, a pending goal timer is re-armed so it fires no earlier than
+ * BOTH the normal idle delay and the hold deadline; a busy run is never
+ * interrupted — the post-agent_end arm applies the same floor. Hold never
+ * creates a wake and resumes automatically without a re-enable.
  *
  * GENERATION: the supervisor bumps a control/lifecycle generation on enable,
- * pause, agent_start and agent_end and sends it with each event; every
- * heartbeat response echoes the generation it was armed under. The supervisor
- * rejects mismatched generations, fencing stale output (e.g. a legacy beat
- * queued before an enable, or a prior idle cycle's line) from consuming the
- * new budget.
+ * hold, complete, pause, agent_start and agent_end and sends it with each
+ * event; every heartbeat response echoes the generation it was armed under.
+ * The supervisor rejects mismatched generations, fencing stale output (e.g. a
+ * beat queued before a transition, or a prior idle cycle's line).
  *
- * The supervisor re-checks generation/busy/idleness/paused/budget at delivery
+ * The supervisor re-checks generation/busy/idleness/paused/expiry at delivery
  * time, so a heartbeat emitted here can still be dropped there. Arming NEVER
- * fires immediately: wakes only happen after the full idle delay, so no
- * zero-delay prompt loop is possible.
+ * fires immediately: wakes only happen after the full delay, so no zero-delay
+ * prompt loop is possible.
  *
  * The supervisor delivers stdout messages via pi.sendUserMessage with
  * { deliverAs: "steer" } — never bare (bare calls are refused and
@@ -74,7 +81,7 @@
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
  * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"; used only for the
  * auth header), AUTONOMY_TOKEN (optional bearer for proxied daemons),
- * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables; legacy mode only),
+ * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables; ambient mode only),
  * AUTONOMY_ERROR_BACKOFF_MS (default 5000), AUTONOMY_FETCH_TIMEOUT_MS
  * (default 30000 — must exceed the 20s server hold so a hung response
  * can never wedge the loop and shutdown/error paths stay reachable),
@@ -99,6 +106,9 @@ const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
 // Mirror of the supervisor's clamp: Node clamps setTimeout above 2^31-1ms
 // to 1ms, so anything larger is rejected rather than mis-scheduled.
 const MAX_IDLE_DELAY_MS = 3_600_000;
+// Fixed ambient window used only when the supervisor has not sent one yet
+// (e.g. a standalone worker that never receives init). Bounded either way.
+const AMBIENT_LIFETIME_MS = 2 * 3_600_000;
 
 const emit = (kind, message) => {
 	stdout.write(`${JSON.stringify({ kind, message })}\n`);
@@ -161,13 +171,19 @@ function render(data, priority, summary) {
 // ── heartbeat: idle self-wake, driven by supervisor events on stdin ──
 // Exactly ONE idle timer exists at any time; every arm clears any pending one.
 let idleTimer = null;
-let mode = "legacy";
-let heartbeatArmed = false; // legacy-only gate: set once by the 10s fallback
-let continuationDelayMs = 0;
-let continuationContext = "";
-let continuationRemaining = 0;
+let mode = "ambient";
+let goalDelayMs = 0;
+let goalText = "";
+// Absolute deadlines (epoch ms). Absolute, never relative, so a crash replay
+// or respawn cannot silently renew a hold or the ambient window.
+let holdUntil = 0;
+let ambientExpiresAt = Date.now() + AMBIENT_LIFETIME_MS;
 let generation = 0;
 let busy = false; // supervisor-provided snapshot + agent events
+// Ambient-only gate: set once by the 10s fallback so a supervisor that never
+// forwards lifecycle events still gets its fallback check. Explicit ambient
+// entry points (complete) set it too.
+let ambientFallbackArmed = false;
 
 const clearIdleTimer = () => {
 	if (idleTimer) {
@@ -176,41 +192,55 @@ const clearIdleTimer = () => {
 	}
 };
 
-const legacyHeartbeat = () =>
+const ambientHeartbeat = () =>
 	emitHeartbeat(
 		"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
 			"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
 			"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.",
 	);
 
-const continuationHeartbeat = () =>
+const goalHeartbeat = () =>
 	emitHeartbeat(
-		`[heartbeat] continuation check: ${continuationContext}\n` +
-			"Advisory: inspect the current approved work and continue one safe, unblocked step. " +
-			"If genuinely blocked, waiting on a human, or finished, pause the heartbeat " +
-			"(heartbeat_control pause or /hb pause) and report the blocker — never invent work or authority.",
+		`[heartbeat] goal check: ${goalText}\n` +
+			"Advisory: inspect the current approved goal and keep the authorized work moving — do not " +
+			"routinely stop after a single step. Use hold (heartbeat_control hold) for a known finite " +
+			"wait; if genuinely blocked on a human, pause (heartbeat_control pause or /hb pause) and " +
+			"report the blocker; when the goal is done, complete it (heartbeat_control complete) — " +
+			"never invent work or authority.",
 	);
 
-const armLegacy = () => {
-	if (HEARTBEAT_MS <= 0) return;
+// Arm the single goal timer only when the session is idle. The fire time is
+// no earlier than BOTH the configured idle delay and any hold deadline.
+const armGoalIfIdle = () => {
+	if (busy || mode !== "goal" || !(goalDelayMs > 0)) return;
+	if (goalDelayMs > MAX_IDLE_DELAY_MS) return; // never schedule a clamped-to-1ms timer
+	const now = Date.now();
+	const delay = holdUntil > now ? Math.max(goalDelayMs, holdUntil - now) : goalDelayMs;
 	clearIdleTimer();
 	idleTimer = setTimeout(() => {
 		idleTimer = null;
-		legacyHeartbeat();
-	}, HEARTBEAT_MS);
+		goalHeartbeat();
+	}, delay);
 };
 
-// Arm the single continuation timer only when the session is idle and budget
-// remains. Called on agent_end, on enable while idle, and on crash replay
-// (init) while idle — a crash while idle must not leave the net inert.
-const armContinuationIfIdle = () => {
-	if (busy || !(continuationDelayMs > 0) || continuationRemaining <= 0) return;
-	if (continuationDelayMs > MAX_IDLE_DELAY_MS) return; // never schedule a clamped-to-1ms timer
+// Arm the single ambient timer. The due time is no earlier than BOTH the
+// normal 30-minute interval and any hold deadline; when that due time would
+// reach or pass the fixed ambient expiry the arm is REFUSED outright — the
+// wake is never pulled earlier to fit inside the window, and nothing fires
+// past the expiry.
+const armAmbientIfIdle = () => {
+	if (busy || mode !== "ambient" || HEARTBEAT_MS <= 0) return;
+	const now = Date.now();
+	if (!Number.isFinite(ambientExpiresAt) || ambientExpiresAt <= 0) return;
+	let due = now + HEARTBEAT_MS;
+	if (holdUntil > now) due = Math.max(due, holdUntil);
+	if (due > ambientExpiresAt) return; // next due time is past the window: refuse
 	clearIdleTimer();
 	idleTimer = setTimeout(() => {
 		idleTimer = null;
-		continuationHeartbeat();
-	}, continuationDelayMs);
+		if (mode !== "ambient" || Date.now() > ambientExpiresAt) return;
+		ambientHeartbeat();
+	}, due - now);
 };
 
 stdin.setEncoding("utf8");
@@ -232,43 +262,67 @@ stdin.on("data", (chunk) => {
 			} else if (parsed.event === "agent_end") {
 				if (gen !== null) generation = gen;
 				busy = false;
-				// Legacy keeps its old gate: re-arm only after the fallback armed once.
-				if (mode === "legacy") {
-					if (heartbeatArmed) armLegacy();
-				} else if (mode === "continuation") {
-					armContinuationIfIdle();
+				if (mode === "goal") {
+					armGoalIfIdle();
+				} else if (mode === "ambient") {
+					if (ambientFallbackArmed) armAmbientIfIdle();
 				}
 			} else if (parsed.event === "init") {
 				// Crash-replay / startup snapshot from the supervisor. Consumes the
-				// busy snapshot: an idle replay arms the timer (the parent may
+				// busy snapshot: an idle goal replay arms the timer (the parent may
 				// never turn again), a busy replay waits for the next agent_end.
-				mode = parsed.mode === "continuation" || parsed.mode === "paused" ? parsed.mode : "legacy";
+				mode = parsed.mode === "goal" || parsed.mode === "paused" ? parsed.mode : "ambient";
 				const delay = asNumber(parsed.idleDelayMs);
-				continuationDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
-				continuationContext = typeof parsed.context === "string" ? parsed.context : "";
-				const remaining = asNumber(parsed.remaining);
-				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
+				goalDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
+				goalText = typeof parsed.goal === "string" ? parsed.goal : "";
+				const expiry = asNumber(parsed.ambientExpiresAt);
+				ambientExpiresAt = expiry !== null && expiry > 0 ? expiry : 0;
+				const hold = asNumber(parsed.holdUntil);
+				holdUntil = hold !== null && hold > 0 ? hold : 0;
 				if (gen !== null) generation = gen;
 				busy = parsed.busy === true;
 				clearIdleTimer();
-				if (mode === "continuation") armContinuationIfIdle();
+				if (mode === "goal") armGoalIfIdle();
+				// Ambient waits for its own gate (the 10s fallback) — the same
+				// startup contract the legacy fallback always had.
 			} else if (parsed.event === "enable") {
-				mode = "continuation";
+				mode = "goal";
 				const delay = asNumber(parsed.idleDelayMs);
-				continuationDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
-				continuationContext = typeof parsed.context === "string" ? parsed.context : "";
-				const remaining = asNumber(parsed.remaining);
-				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
+				goalDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
+				goalText = typeof parsed.goal === "string" ? parsed.goal : "";
+				holdUntil = 0; // a fresh goal starts unheld
 				if (gen !== null) generation = gen;
 				busy = parsed.busy === true;
-				clearIdleTimer(); // cancels any pending legacy/stale timer
-				armContinuationIfIdle(); // arms now when the session is already idle
+				clearIdleTimer(); // cancels any pending ambient/stale timer
+				armGoalIfIdle(); // arms now when the session is already idle
+			} else if (parsed.event === "complete") {
+				mode = "ambient";
+				goalText = "";
+				holdUntil = 0;
+				const expiry = asNumber(parsed.ambientExpiresAt);
+				ambientExpiresAt = expiry !== null && expiry > 0 ? expiry : 0;
+				if (gen !== null) generation = gen;
+				clearIdleTimer();
+				ambientFallbackArmed = true;
+				armAmbientIfIdle(); // arms (clamped to the deadline) when idle
+			} else if (parsed.event === "hold") {
+				const hold = asNumber(parsed.holdUntil);
+				if (hold !== null && hold > 0) holdUntil = hold;
+				if (gen !== null) generation = gen;
+				// Liveness: hold (re)schedules from the CURRENT idle state even
+				// when no timer is pending — a beat may have been emitted just
+				// before the hold, leaving no timer and no future agent_end.
+				// Never arms while busy (a busy run arms on agent_end with the
+				// same delay/hold floors); holding never fires immediately.
+				if (!busy && (mode === "goal" || mode === "ambient")) {
+					clearIdleTimer();
+					if (mode === "goal") armGoalIfIdle();
+					else armAmbientIfIdle();
+				}
 			} else if (parsed.event === "heartbeat_defer") {
-				if (gen === generation && mode === "continuation") armContinuationIfIdle();
-			} else if (parsed.event === "budget") {
-				const remaining = asNumber(parsed.remaining);
-				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
-				if (continuationRemaining <= 0) clearIdleTimer(); // stop pointless pending fires
+				if (gen !== generation) continue;
+				if (mode === "goal") armGoalIfIdle();
+				else if (mode === "ambient") armAmbientIfIdle();
 			} else if (parsed.event === "pause") {
 				mode = "paused";
 				if (gen !== null) generation = gen;
@@ -285,13 +339,14 @@ stdin.on("end", () => {
 });
 
 // Fallback: arm after the first poll cycle even if no events arrived yet —
-// covers supervisors that don't forward lifecycle events. LEGACY MODE ONLY:
-// a continuation-enabled session gets its busy/idle truth from the
-// supervisor's init/enable events, never from this unconditional timer.
+// covers supervisors that don't forward lifecycle events. AMBIENT MODE ONLY
+// (bounded by ambientExpiresAt): a goal-enabled session gets its busy/idle
+// truth from the supervisor's init/enable events, never from this
+// unconditional timer.
 setTimeout(() => {
-	if (mode === "legacy" && !heartbeatArmed) {
-		heartbeatArmed = true;
-		armLegacy();
+	if (mode === "ambient" && !ambientFallbackArmed) {
+		ambientFallbackArmed = true;
+		armAmbientIfIdle();
 	}
 }, 10_000);
 
