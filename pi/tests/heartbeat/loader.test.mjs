@@ -3,46 +3,59 @@
  * (pi/extensions/notifications.ts).
  *
  * Unlike supervisor.test.mjs (a VM sandbox with stubbed imports), this test
- * loads the ACTUAL TypeScript source through jiti — the same transpiler pi
- * uses for extensions — with the REAL typebox and @earendil-works/pi-ai
- * packages, resolved via the node_modules symlink into pi's installed
- * runtime. It proves the extension transpiles, registers a valid
+ * copies the source into a dependency-free temporary directory and loads
+ * it through Pi's loadExtensions API, including its real package aliases.
+ * Set PI_SDK_ROOT for a non-global installation; otherwise npm root -g
+ * locates the installed SDK. It proves the extension transpiles, registers a valid
  * model-callable tool and human command, and that the TypeBox schema itself
  * carries the settled contract (action enum incl. hold/complete, no retired
  * wakeBudget, bounded integers).
  *
- * Run: node --test tests/heartbeat/loader.test.mjs   (from the repo root)
+ * Run: node --test pi/tests/heartbeat/loader.test.mjs (from the repo root)
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createJiti } from "jiti";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const jiti = createJiti(import.meta.url);
+const sdkRoot = process.env.PI_SDK_ROOT ?? join(
+	execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
+	"@earendil-works/pi-coding-agent",
+);
+const { loadExtensions } = await import(pathToFileURL(join(sdkRoot, "dist/core/extensions/loader.js")).href);
 
-test("extension transpiles via the real Pi loader (jiti) and registers the control surface", async () => {
-	const { default: setup } = await jiti.import("../../extensions/notifications.ts");
-
-	// This test process may itself run under pi-subagents
-	// (PI_SUBAGENT_CHILD=1), which the supervisor must — and does — refuse.
-	// Clear it here to simulate a parent session; child-exclusion behavior is
-	// covered in supervisor.test.mjs.
+async function isolatedExtension(t, isChild = false) {
+	const dir = await mkdtemp(join(tmpdir(), "goal-heartbeat-loader-"));
 	const savedChildEnv = process.env.PI_SUBAGENT_CHILD;
-	delete process.env.PI_SUBAGENT_CHILD;
+	t.after(async () => {
+		if (savedChildEnv === undefined) delete process.env.PI_SUBAGENT_CHILD;
+		else process.env.PI_SUBAGENT_CHILD = savedChildEnv;
+		await rm(dir, { recursive: true, force: true });
+	});
+	for (const file of ["notifications.ts", "notifications.worker.mjs"]) {
+		await copyFile(new URL(`../../extensions/${file}`, import.meta.url), join(dir, file));
+	}
+	if (isChild) process.env.PI_SUBAGENT_CHILD = "1";
+	else delete process.env.PI_SUBAGENT_CHILD;
+	const loaded = await loadExtensions([join(dir, "notifications.ts")], dir);
+	assert.deepEqual(loaded.errors, []);
+	assert.equal(loaded.extensions.length, 1);
+	return loaded;
+}
 
-	const handlers = new Map();
-	let toolDef = null;
-	const commands = new Map();
+test("Pi loads the dependency-free extension and its control surface", async (t) => {
+	const loaded = await isolatedExtension(t);
+	const extension = loaded.extensions[0];
+	const handlers = extension.handlers;
+	const commands = extension.commands;
+	const toolDef = extension.tools.get("heartbeat_control")?.definition;
 	const appended = [];
-	const pi = {
-		on: (name, fn) => handlers.set(name, fn),
-		sendUserMessage: () => {},
-		registerTool: (def) => (toolDef = def),
-		registerCommand: (name, opts) => commands.set(name, opts),
-		appendEntry: (customType, data) => appended.push({ customType, data }),
-	};
-	setup(pi);
-	if (savedChildEnv !== undefined) process.env.PI_SUBAGENT_CHILD = savedChildEnv;
+	// Exercise controls without session_start: no worker or live HTTP traffic.
+	loaded.runtime.appendEntry = (customType, data) => appended.push({ customType, data });
 
 	assert.ok(toolDef, "registerTool called");
 	assert.equal(toolDef.name, "heartbeat_control");
@@ -66,7 +79,6 @@ test("extension transpiles via the real Pi loader (jiti) and registers the contr
 	const enabled = await toolDef.execute("id", {
 		action: "enable",
 		nextAction: "finish the acceptance report",
-		idleDelaySeconds: 30,
 	});
 	assert.equal(enabled.details.ok, true);
 	assert.equal(enabled.details.state.mode, "goal");
@@ -111,4 +123,12 @@ test("extension transpiles via the real Pi loader (jiti) and registers the contr
 	assert.match(notes[0], /paused/);
 	await commands.get("hb").handler("enable another authorized goal", { ui: { notify: (m) => notes.push(m) } });
 	assert.equal((await toolDef.execute("id", { action: "status" })).details.state.mode, "goal");
+});
+
+test("Pi loads a native child without heartbeat tools or lifecycle handlers", async (t) => {
+	const loaded = await isolatedExtension(t, true);
+	const extension = loaded.extensions[0];
+	assert.equal(extension.tools.size, 0);
+	assert.equal(extension.commands.size, 0);
+	assert.equal(extension.handlers.size, 0);
 });
