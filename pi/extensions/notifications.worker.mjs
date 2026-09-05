@@ -3,31 +3,52 @@
  * notifications.worker.mjs — the autonomy-daemon wake bridge (worker process).
  *
  * Spawned by notifications.ts (the supervisor shim, loaded as a pi extension).
- * Read fresh from disk at every spawn, so code updates apply without touching
- * the pi session. ALL bridge logic lives here:
+ * Read fresh on each spawn; use /reload or restart/resume after updates.
+ * This adapter currently:
  *
- *   - long-polls the daemon's notification endpoint (20s hold)
- *   - filters own-echo rows, computes the state signature, dedups wakes
- *   - cooldown + backlog so nothing is lost during wake storms
+ *   - long-polls the daemon's notification endpoint (20s server hold)
+ *   - transport pacing: a small floor between HTTP requests. Undismissed
+ *     persistent rows make /notifications return IMMEDIATELY on every
+ *     request, so repeat suppression alone would turn the poll loop into
+ *     a hot loop. Pacing bounds the request rate only — it is NOT a
+ *     delivery cooldown: it never buffers, withholds, or drops a
+ *     message, and it adds at most one interval of latency to the poll
+ *     AFTER the one being handled.
+ *   - suppresses only REPEATED PRESENTATION: a state signature (per-row
+ *     handle + text + resource_key, summary places/counts, total) is
+ *     compared against the last wake; an unchanged signature is silence.
+ *     The signature resets on a genuinely empty response, so a persistent
+ *     row that reappears after going away is emitted again. Server-side
+ *     sender suppression / summary throttling / persistent-row re-offer
+ *     are the daemon's job (crates/prime/src/routes/notifications.rs).
  *   - idle heartbeat driven by lifecycle events forwarded on stdin
+ *
+ * HIGH vs LOW is ONLY "rendered automatically" vs "requires a deliberate
+ * notifications/list read" — no urgency labels are shown to the agent.
+ * This worker never dismisses and never reads the feed; it renders what
+ * the long-poll returns and stops.
  *
  * PROTOCOL:
  *   stdin  (from supervisor): JSON lines {"event": "agent_start"|"agent_end"|...}
  *   stdout (to supervisor):  JSON lines {"kind": "wake"|"heartbeat", "message": "..."}
  *
  * The supervisor delivers stdout messages via pi.sendUserMessage with
- * { streamingBehavior: "steer" } — never bare (bare calls are refused and
+ * { deliverAs: "steer" } — never bare (bare calls are refused and
  * dropped while the agent is busy).
  *
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
- * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"), AUTONOMY_TOKEN
- * (optional bearer for proxied daemons), AUTONOMY_WAKE_COOLDOWN_MS
- * (default 30000), AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables).
+ * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"; used only for the
+ * auth header), AUTONOMY_TOKEN (optional bearer for proxied daemons),
+ * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables),
+ * AUTONOMY_ERROR_BACKOFF_MS (default 5000), AUTONOMY_FETCH_TIMEOUT_MS
+ * (default 30000 — must exceed the 20s server hold so a hung response
+ * can never wedge the loop and shutdown/error paths stay reachable),
+ * AUTONOMY_POLL_INTERVAL_MS (default 1000 — transport pacing floor
+ * between requests, see above).
  *
- * WAKE DISCIPLINE (Michael's efficiency ruling): wake only when notification
- * STATE changes — a state signature (priority handles + summary + visible
- * total) is compared against the last wake; an unchanged signature is
- * silence, no matter how many polls pass.
+ * HACK: presentation repeat suppression and request pacing compensate for
+ * the current endpoint's immediate persistent-row replay. Remove them when
+ * Autonomy owns reconnect/replay delivery; they are not a second policy layer.
  */
 
 import { stdin, stdout } from "node:process";
@@ -36,8 +57,9 @@ const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
 const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
 const TOKEN = process.env.AUTONOMY_TOKEN ?? "";
 const POLL_HOLD_SECONDS = 20;
-const WAKE_COOLDOWN_MS = Number(process.env.AUTONOMY_WAKE_COOLDOWN_MS ?? 30_000);
-const ERROR_BACKOFF_MS = 5_000;
+const ERROR_BACKOFF_MS = Number(process.env.AUTONOMY_ERROR_BACKOFF_MS ?? 5_000);
+const FETCH_TIMEOUT_MS = Number(process.env.AUTONOMY_FETCH_TIMEOUT_MS ?? 30_000);
+const POLL_INTERVAL_MS = Number(process.env.AUTONOMY_POLL_INTERVAL_MS ?? 1_000);
 const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
 
 const emit = (kind, message) => {
@@ -52,33 +74,35 @@ function authHeaders() {
 	return headers;
 }
 
+// Temporary repeat guard for the current long-poll contract. Include row
+// identity and every rendered field so a changed presentation is not lost.
 function stateSignature(data, priority) {
-	const handles = priority.map((i) => i.handle ?? i.resource_key ?? i.text ?? "").sort();
+	const handles = priority
+		.map((i) => JSON.stringify([i.handle ?? "", i.sender ?? "", i.place ?? "", i.text ?? "", i.resource_key ?? ""]))
+		.sort();
 	const summary = Object.entries(data.summary ?? {})
 		.sort(([a], [b]) => a.localeCompare(b))
 		.map(([place, count]) => `${place}:${count}`);
-	const visibleTotal =
-		priority.length + Object.values(data.summary ?? {}).reduce((a, b) => a + b, 0);
-	return JSON.stringify({ h: handles, s: summary, t: visibleTotal });
+	return JSON.stringify({ h: handles, s: summary, t: data.total ?? null });
 }
 
-function renderItem(item, tier) {
+function renderItem(item) {
 	const place = item.place ? ` @ ${item.place}` : "";
 	const key = item.resource_key ? ` (${item.resource_key})` : "";
-	return `- [${tier}] ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
+	return `- ${item.sender ?? "?"}${place}${key}: ${item.text ?? "(no text)"}`;
 }
 
 function render(data, priority, summary) {
 	const lines = [];
-	for (const item of priority) lines.push(renderItem(item, "HIGH"));
+	for (const item of priority) lines.push(renderItem(item));
 	for (const [place, count] of Object.entries(summary ?? {})) {
-		lines.push(`- [low] ${place}: ${count}`);
+		lines.push(`- ${place}: ${count} (use notifications/list for items)`);
 	}
 	if (data.total !== undefined) lines.push(`total unattended: ${data.total}`);
 	if (lines.length === 0) {
 		return `autonomy notifications: response shape not recognized — inspecting raw:\n${JSON.stringify(data).slice(0, 2000)}`;
 	}
-	const head = `autonomy notifications (${priority.length} high, ${Object.keys(summary ?? {}).length} places, total ${data.total ?? "?"}):`;
+	const head = "Autonomy notifications:";
 	return `${head}\n${lines.join("\n")}`;
 }
 
@@ -129,17 +153,6 @@ stdin.on("end", () => {
 	process.exit(0);
 });
 
-// The first agent_end from the supervisor arms the heartbeat (it forwards one
-// immediately after wiring, before the agent has done anything — arm on that).
-let firstAgentEnd = true;
-
-stdin.on("data", () => {}); // keep the readable side flowing
-const armOnFirstAgentEnd = () => {
-	if (heartbeatArmed) return;
-	heartbeatArmed = true;
-	armIdleHeartbeat();
-};
-
 // Fallback: arm after the first poll cycle even if no events arrived yet —
 // covers supervisors that don't forward lifecycle events.
 setTimeout(() => {
@@ -150,9 +163,8 @@ setTimeout(() => {
 }, 10_000);
 
 // ── main poll loop ──
-let lastWake = 0;
-let backlog = [];
 let lastSig = null;
+let lastErrorText = null;
 let running = true;
 
 const cleanup = () => {
@@ -169,42 +181,48 @@ const poll = async () => {
 		try {
 			const res = await fetch(`${BASE}/notifications?timeout=${POLL_HOLD_SECONDS}`, {
 				headers: authHeaders(),
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 			});
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const data = await res.json();
-			const priority = (data.priority_notifications ?? []).filter((n) => n.sender !== ACTOR);
-			const summary = Object.fromEntries(
-				Object.entries(data.summary ?? {}).filter(([place]) => !place.startsWith(`${ACTOR}/`)),
-			);
-			const trivial =
+			lastErrorText = null;
+			const priority = data.priority_notifications ?? [];
+			const summary = data.summary ?? {};
+
+			// A genuinely empty response clears the signature: a persistent
+			// row that reappears after this point is new presentation again,
+			// not a repeat of something already shown.
+			const empty =
 				priority.length === 0 &&
 				Object.keys(summary).length === 0 &&
 				(data.total === undefined || data.total === 0);
-			if (trivial) continue;
+			if (empty) {
+				lastSig = null;
+			} else {
 
-			const sig = stateSignature(data, priority);
-			if (sig === lastSig) continue;
-			lastSig = sig;
-
-			const now = Date.now();
-			if (now - lastWake < WAKE_COOLDOWN_MS) {
-				for (const item of priority) backlog.push(renderItem(item, "HIGH"));
-				for (const [place, count] of Object.entries(summary)) {
-					backlog.push(`- [low] ${place}: ${count}`);
+				const sig = stateSignature(data, priority);
+				if (sig !== lastSig) {
+					lastSig = sig;
+					emit("wake", render(data, priority, summary));
 				}
-				continue;
 			}
-			lastWake = now;
-			const buffered = backlog.splice(0);
-			const message =
-				buffered.length > 0
-					? `autonomy notifications (buffered during cooldown):\n${buffered.join("\n")}`
-					: render(data, priority, summary);
-			emit("wake", message);
 		} catch (err) {
-			emit("wake", `[notifications] poll failed: ${err}; retrying in ${ERROR_BACKOFF_MS}ms`);
+			const errText = String(err);
+			// First failure wakes; the SAME error on retries stays quiet
+			// (the retry continues regardless); a changed error or a
+			// recovery followed by a new failure wakes again.
+			if (errText !== lastErrorText) {
+				lastErrorText = errText;
+				emit("wake", `[notifications] poll failed: ${err}; retrying in ${ERROR_BACKOFF_MS}ms`);
+			}
 			await sleep(ERROR_BACKOFF_MS);
 		}
+		// Transport pacing (NOT a delivery cooldown): bounds the request
+		// rate on EVERY iteration — including unchanged-signature and empty
+		// responses, which are exactly the immediate-return persistent-row
+		// case. Nothing is buffered or withheld; the NEXT poll simply
+		// waits out this floor.
+		await sleep(POLL_INTERVAL_MS);
 	}
 };
 

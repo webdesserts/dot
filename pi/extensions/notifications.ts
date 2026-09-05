@@ -1,41 +1,16 @@
 /**
- * notifications — autonomy-daemon wake bridge for pi (supervisor shim).
+ * Autonomy notification transport adapter for Pi.
  *
- * ARCHITECTURE (2026-09-04): pi sessions are always resumed — resumed
- * sessions restore their extension SNAPSHOT, so code in this file is frozen
- * at whatever session first loaded it. To keep the bridge updatable without
- * ever requiring a fresh session, this file is a deliberately boring
- * SUPERVISOR: it spawns `notifications.worker.mjs` (read fresh from disk at
- * every spawn) as a child process, forwards pi lifecycle events to the
- * child's stdin, and delivers the child's stdout wake messages through
- * `pi.sendUserMessage` with { streamingBehavior: "steer" } (never bare —
- * bare calls are refused and DROPPED while the agent is busy).
- *
- * ALL bridge logic lives in the worker: polling, filtering, wake-diff
- * signatures, cooldown/backlog, rendering, the idle heartbeat. Updating the
- * bridge = edit the worker file, then either restart the session or
- * `pkill -f notifications.worker` (this supervisor respawns it within
- * RESPAWN_DELAY_MS with the new code). The supervisor itself should never
- * need to change; if it does, that's the one exception that needs a fresh
- * session.
- *
- * SUBAGENTS MUST NOT SPAWN THE WORKER: subagents are spawned with
- * --append-system-prompt (matches harness-context.ts's detection), and a
- * seat polling the actor's queue would consume the actor's batch.
- *
- * Config via env (inherited by the worker): AUTONOMY_BASE,
- * AUTONOMY_ACTOR, AUTONOMY_TOKEN, AUTONOMY_WAKE_COOLDOWN_MS,
- * AUTONOMY_HEARTBEAT_MS.
+ * One worker per parent session; native subagents must not consume its queue.
+ * Use /reload or restart/resume after changing either file. A file watcher is
+ * unnecessary: Pi reloads extensions without discarding the conversation.
+ * Delivery policy belongs to Autonomy, not this process supervisor.
  */
-
 import { spawn } from "node:child_process";
-import { watch, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-// realpathSync: ~/.pi/agent/extensions/notifications.ts is a SYMLINK into
-// dots — import.meta.url resolves to the symlink path, but the worker lives
-// next to the real file. Resolve first or the spawn can't find it.
 const WORKER_PATH = path.join(
 	path.dirname(realpathSync(fileURLToPath(import.meta.url))),
 	"notifications.worker.mjs",
@@ -43,31 +18,33 @@ const WORKER_PATH = path.join(
 const RESPAWN_DELAY_MS = 2_000;
 
 export default function (pi) {
+	// pi-subagents marks its background runtime explicitly; session_start does
+	// not carry the systemPromptOptions used by before_agent_start.
+	if (process.env.PI_SUBAGENT_CHILD === "1") return;
+
 	let running = false;
 	let child = null;
-	let watcher = null;
 	let respawnTimer = null;
 
 	const send = (message) => {
 		if (!message) return;
 		try {
-			// steer: injected in-between rounds of a running turn (Michael's
-			// ruling). NEVER bare — while busy the runtime refuses and DROPS.
-			pi.sendUserMessage(message, { streamingBehavior: "steer" });
+			pi.sendUserMessage(message, { deliverAs: "steer" });
 		} catch (err) {
 			console.error(`[notifications] send failed: ${err}`);
 		}
 	};
 
 	const spawnWorker = () => {
-		if (!running) return;
-		if (child) return;
-		child = spawn(process.execPath, [WORKER_PATH], {
+		if (!running || child) return;
+		const spawned = spawn(process.execPath, [WORKER_PATH], {
 			env: process.env,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
+		child = spawned;
 		let stdoutBuf = "";
-		child.stdout.on("data", (chunk) => {
+		spawned.stdout.on("data", (chunk) => {
+			if (child !== spawned || !running) return;
 			stdoutBuf += chunk;
 			let idx;
 			while ((idx = stdoutBuf.indexOf("\n")) !== -1) {
@@ -76,70 +53,47 @@ export default function (pi) {
 				if (!line) continue;
 				try {
 					const parsed = JSON.parse(line);
-					if (parsed.kind === "wake" || parsed.kind === "heartbeat") send(parsed.message);
+					if ((parsed.kind === "wake" || parsed.kind === "heartbeat") && typeof parsed.message === "string") {
+						send(parsed.message);
+					}
 				} catch {
-					// non-JSON line — surface it as a wake so nothing is lost
 					send(line);
 				}
 			}
 		});
-		child.stderr.on("data", (chunk) => {
-			console.error(`[notifications.worker] ${chunk}`);
-		});
-		child.on("exit", (code) => {
+		spawned.stderr.on("data", (chunk) => console.error(`[notifications.worker] ${chunk}`));
+		const exited = (reason) => {
+			// An old child's late exit must not clear a replacement's handle or
+			// schedule another worker. Error followed by exit also runs only once.
+			if (child !== spawned) return;
 			child = null;
 			if (!running) return;
-			console.error(`[notifications.worker] exited (${code}); respawn in ${RESPAWN_DELAY_MS}ms`);
-			respawnTimer = setTimeout(spawnWorker, RESPAWN_DELAY_MS);
-		});
-	};
-
-	const killWorker = () => {
-		if (child) {
-			try {
-				child.kill();
-			} catch {}
-			child = null;
-		}
-	};
-
-	// Hot-swap: when the worker file changes on disk, respawn so the new
-	// code loads without touching the session.
-	const armWatcher = () => {
-		try {
-			watcher = watch(WORKER_PATH, () => {
-				console.error("[notifications] worker file changed — respawning");
-				killWorker();
+			console.error(`[notifications.worker] stopped (${reason}); retry in ${RESPAWN_DELAY_MS}ms`);
+			respawnTimer = setTimeout(() => {
+				respawnTimer = null;
 				spawnWorker();
-			});
-		} catch (err) {
-			console.error(`[notifications] fs.watch unavailable: ${err}`);
-		}
+			}, RESPAWN_DELAY_MS);
+		};
+		spawned.on("exit", exited);
+		spawned.on("error", exited);
 	};
 
-	pi.on("session_start", async (event) => {
-		const isSubagent = Boolean(event.systemPromptOptions?.appendSystemPrompt);
-		if (isSubagent || running) return;
+	pi.on("session_start", () => {
+		if (running) return;
 		running = true;
-
-		pi.on("session_shutdown", async () => {
-			running = false;
-			if (watcher) watcher.close();
-			if (respawnTimer) clearTimeout(respawnTimer);
-			killWorker();
-		});
-
-		// Forward lifecycle events to the worker's stdin (the heartbeat's
-		// turn-end re-arm needs agent_start/agent_end visibility).
-		const forward = (name) => (payload) => {
-			if (child?.stdin?.writable) {
-				child.stdin.write(`${JSON.stringify({ event: name })}\n`);
-			}
-		};
-		pi.on("agent_start", forward("agent_start"));
-		pi.on("agent_end", forward("agent_end"));
-
 		spawnWorker();
-		armWatcher();
 	});
+	pi.on("session_shutdown", () => {
+		running = false;
+		if (respawnTimer) clearTimeout(respawnTimer);
+		respawnTimer = null;
+		const stopped = child;
+		child = null;
+		stopped?.kill();
+	});
+	const forward = (name) => () => {
+		if (child?.stdin?.writable) child.stdin.write(`${JSON.stringify({ event: name })}\n`);
+	};
+	pi.on("agent_start", forward("agent_start"));
+	pi.on("agent_end", forward("agent_end"));
 }

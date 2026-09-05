@@ -1,7 +1,35 @@
 {
-  "defaultProvider": "fireworks",
-  "defaultModel": "accounts/fireworks/models/glm-5p3-flash",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "subagents": {
+    "defaultModel": "fireworks/accounts/fireworks/models/glm-5p3-flash",
+    "agentOverrides": {
+      "analyst": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "architect": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "claim-reviewer": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "coherence-reviewer": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "designer": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "forecast-reviewer": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "hunt": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "notetaker": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "planner": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "worker": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "delegate": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "oracle": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "researcher": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "reviewer": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+      "scout": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" }
+    },
+    "modelScope": {
+      "enforce": true,
+      "strict": true,
+      "allow": ["fireworks/accounts/fireworks/models/glm-5p3-flash"]
+    }
+  },
   "defaultThinkingLevel": "high",
+  "modelThinkingLevels": {
+    "openai-codex/gpt-6-astra": "medium"
+  },
   "packages": [
     "npm:pi-mcp-adapter",
     "npm:@luxusai/pi-hindsight",
@@ -19,7 +47,7 @@
     "extensions/harness-context.ts",
     "extensions/notifications.ts"
   ],
-  "lastChangelogVersion": "0.84.4",
+  "lastChangelogVersion": "0.85.0",
   "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",
