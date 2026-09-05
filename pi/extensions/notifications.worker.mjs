@@ -29,8 +29,43 @@
  * the long-poll returns and stops.
  *
  * PROTOCOL:
- *   stdin  (from supervisor): JSON lines {"event": "agent_start"|"agent_end"|...}
- *   stdout (to supervisor):  JSON lines {"kind": "wake"|"heartbeat", "message": "..."}
+ *   stdin  (from supervisor): JSON lines
+ *     {"event": "agent_start"|"agent_end", "generation": n}
+ *     {"event": "init",   "busy": bool, "mode": "legacy"|"continuation"|"paused",
+ *      "idleDelayMs": n, "context": "...", "remaining": n, "generation": n}
+ *     {"event": "enable", "idleDelayMs": n, "context": "...", "remaining": n,
+ *      "busy": bool, "generation": n}
+ *     {"event": "budget", "remaining": n}
+ *     {"event": "pause",  "generation": n}
+ *   stdout (to supervisor):  JSON lines
+ *     {"kind": "wake", "message": "..."}
+ *     {"kind": "heartbeat", "message": "...", "generation": n}
+ *
+ * HEARTBEAT MODES (session-local; the supervisor owns the wake budget):
+ *   legacy        — default. Original behavior: a 10s fallback arms the idle
+ *                   heartbeat (AUTONOMY_HEARTBEAT_MS, default 30min, fixed
+ *                   canned text) and every agent_end re-arms it. Kept for
+ *                   sessions that never enable continuation.
+ *   continuation  — bounded continuation: the timer is armed on every idle
+ *                   transition — agent_end, an enable issued while already
+ *                   idle, or a crash replay (init) while idle — while budget
+ *                   remains. The 10s fallback NEVER runs in this mode; the
+ *                   busy/idle snapshot comes from the supervisor (init/enable
+ *                   "busy" field), so a heartbeat cannot arm mid-turn.
+ *   paused        — all heartbeat wakes silenced (legacy included) until the
+ *                   supervisor enables again.
+ *
+ * GENERATION: the supervisor bumps a control/lifecycle generation on enable,
+ * pause, agent_start and agent_end and sends it with each event; every
+ * heartbeat response echoes the generation it was armed under. The supervisor
+ * rejects mismatched generations, fencing stale output (e.g. a legacy beat
+ * queued before an enable, or a prior idle cycle's line) from consuming the
+ * new budget.
+ *
+ * The supervisor re-checks generation/busy/idleness/paused/budget at delivery
+ * time, so a heartbeat emitted here can still be dropped there. Arming NEVER
+ * fires immediately: wakes only happen after the full idle delay, so no
+ * zero-delay prompt loop is possible.
  *
  * The supervisor delivers stdout messages via pi.sendUserMessage with
  * { deliverAs: "steer" } — never bare (bare calls are refused and
@@ -39,7 +74,7 @@
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
  * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"; used only for the
  * auth header), AUTONOMY_TOKEN (optional bearer for proxied daemons),
- * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables),
+ * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables; legacy mode only),
  * AUTONOMY_ERROR_BACKOFF_MS (default 5000), AUTONOMY_FETCH_TIMEOUT_MS
  * (default 30000 — must exceed the 20s server hold so a hung response
  * can never wedge the loop and shutdown/error paths stay reachable),
@@ -61,12 +96,29 @@ const ERROR_BACKOFF_MS = Number(process.env.AUTONOMY_ERROR_BACKOFF_MS ?? 5_000);
 const FETCH_TIMEOUT_MS = Number(process.env.AUTONOMY_FETCH_TIMEOUT_MS ?? 30_000);
 const POLL_INTERVAL_MS = Number(process.env.AUTONOMY_POLL_INTERVAL_MS ?? 1_000);
 const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
+// Mirror of the supervisor's clamp: Node clamps setTimeout above 2^31-1ms
+// to 1ms, so anything larger is rejected rather than mis-scheduled.
+const MAX_IDLE_DELAY_MS = 3_600_000;
 
 const emit = (kind, message) => {
 	stdout.write(`${JSON.stringify({ kind, message })}\n`);
 };
 
+const emitHeartbeat = (message) => {
+	stdout.write(`${JSON.stringify({ kind: "heartbeat", message, generation })}\n`);
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const asNumber = (value) => {
+	const n = Number(value);
+	return Number.isFinite(n) ? n : null;
+};
+
+const asGeneration = (value) => {
+	const n = Number(value);
+	return Number.isFinite(n) && n >= 0 ? n : null;
+};
 
 function authHeaders() {
 	const headers = { "X-Auth-User": ACTOR };
@@ -106,22 +158,59 @@ function render(data, priority, summary) {
 	return `${head}\n${lines.join("\n")}`;
 }
 
-// ── heartbeat: idle-timeout self-wake, armed by lifecycle events on stdin ──
+// ── heartbeat: idle self-wake, driven by supervisor events on stdin ──
+// Exactly ONE idle timer exists at any time; every arm clears any pending one.
 let idleTimer = null;
-let heartbeatArmed = false;
+let mode = "legacy";
+let heartbeatArmed = false; // legacy-only gate: set once by the 10s fallback
+let continuationDelayMs = 0;
+let continuationContext = "";
+let continuationRemaining = 0;
+let generation = 0;
+let busy = false; // supervisor-provided snapshot + agent events
 
-const armIdleHeartbeat = () => {
+const clearIdleTimer = () => {
+	if (idleTimer) {
+		clearTimeout(idleTimer);
+		idleTimer = null;
+	}
+};
+
+const legacyHeartbeat = () =>
+	emitHeartbeat(
+		"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
+			"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
+			"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.",
+	);
+
+const continuationHeartbeat = () =>
+	emitHeartbeat(
+		`[heartbeat] continuation check: ${continuationContext}\n` +
+			"Advisory: inspect the current approved work and continue one safe, unblocked step. " +
+			"If genuinely blocked, waiting on a human, or finished, pause the heartbeat " +
+			"(heartbeat_control pause or /hb pause) and report the blocker — never invent work or authority.",
+	);
+
+const armLegacy = () => {
 	if (HEARTBEAT_MS <= 0) return;
-	if (idleTimer) clearTimeout(idleTimer);
+	clearIdleTimer();
 	idleTimer = setTimeout(() => {
 		idleTimer = null;
-		emit(
-			"heartbeat",
-			"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
-				"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
-				"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.",
-		);
+		legacyHeartbeat();
 	}, HEARTBEAT_MS);
+};
+
+// Arm the single continuation timer only when the session is idle and budget
+// remains. Called on agent_end, on enable while idle, and on crash replay
+// (init) while idle — a crash while idle must not leave the net inert.
+const armContinuationIfIdle = () => {
+	if (busy || !(continuationDelayMs > 0) || continuationRemaining <= 0) return;
+	if (continuationDelayMs > MAX_IDLE_DELAY_MS) return; // never schedule a clamped-to-1ms timer
+	clearIdleTimer();
+	idleTimer = setTimeout(() => {
+		idleTimer = null;
+		continuationHeartbeat();
+	}, continuationDelayMs);
 };
 
 stdin.setEncoding("utf8");
@@ -135,13 +224,55 @@ stdin.on("data", (chunk) => {
 		if (!line) continue;
 		try {
 			const parsed = JSON.parse(line);
+			const gen = asGeneration(parsed.generation);
 			if (parsed.event === "agent_start") {
-				if (idleTimer) {
-					clearTimeout(idleTimer);
-					idleTimer = null;
-				}
+				if (gen !== null) generation = gen;
+				busy = true;
+				clearIdleTimer();
 			} else if (parsed.event === "agent_end") {
-				if (heartbeatArmed) armIdleHeartbeat();
+				if (gen !== null) generation = gen;
+				busy = false;
+				// Legacy keeps its old gate: re-arm only after the fallback armed once.
+				if (mode === "legacy") {
+					if (heartbeatArmed) armLegacy();
+				} else if (mode === "continuation") {
+					armContinuationIfIdle();
+				}
+			} else if (parsed.event === "init") {
+				// Crash-replay / startup snapshot from the supervisor. Consumes the
+				// busy snapshot: an idle replay arms the timer (the parent may
+				// never turn again), a busy replay waits for the next agent_end.
+				mode = parsed.mode === "continuation" || parsed.mode === "paused" ? parsed.mode : "legacy";
+				const delay = asNumber(parsed.idleDelayMs);
+				continuationDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
+				continuationContext = typeof parsed.context === "string" ? parsed.context : "";
+				const remaining = asNumber(parsed.remaining);
+				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
+				if (gen !== null) generation = gen;
+				busy = parsed.busy === true;
+				clearIdleTimer();
+				if (mode === "continuation") armContinuationIfIdle();
+			} else if (parsed.event === "enable") {
+				mode = "continuation";
+				const delay = asNumber(parsed.idleDelayMs);
+				continuationDelayMs = delay !== null && delay > 0 ? Math.min(delay, MAX_IDLE_DELAY_MS) : 0;
+				continuationContext = typeof parsed.context === "string" ? parsed.context : "";
+				const remaining = asNumber(parsed.remaining);
+				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
+				if (gen !== null) generation = gen;
+				busy = parsed.busy === true;
+				clearIdleTimer(); // cancels any pending legacy/stale timer
+				armContinuationIfIdle(); // arms now when the session is already idle
+			} else if (parsed.event === "heartbeat_defer") {
+				if (gen === generation && mode === "continuation") armContinuationIfIdle();
+			} else if (parsed.event === "budget") {
+				const remaining = asNumber(parsed.remaining);
+				continuationRemaining = remaining !== null && remaining > 0 ? remaining : 0;
+				if (continuationRemaining <= 0) clearIdleTimer(); // stop pointless pending fires
+			} else if (parsed.event === "pause") {
+				mode = "paused";
+				if (gen !== null) generation = gen;
+				clearIdleTimer();
 			}
 		} catch {
 			// ignore malformed supervisor lines
@@ -154,11 +285,13 @@ stdin.on("end", () => {
 });
 
 // Fallback: arm after the first poll cycle even if no events arrived yet —
-// covers supervisors that don't forward lifecycle events.
+// covers supervisors that don't forward lifecycle events. LEGACY MODE ONLY:
+// a continuation-enabled session gets its busy/idle truth from the
+// supervisor's init/enable events, never from this unconditional timer.
 setTimeout(() => {
-	if (!heartbeatArmed) {
+	if (mode === "legacy" && !heartbeatArmed) {
 		heartbeatArmed = true;
-		armIdleHeartbeat();
+		armLegacy();
 	}
 }, 10_000);
 
@@ -169,7 +302,7 @@ let running = true;
 
 const cleanup = () => {
 	running = false;
-	if (idleTimer) clearTimeout(idleTimer);
+	clearIdleTimer();
 	stdout.end?.();
 	process.exit(0);
 };
