@@ -1,70 +1,40 @@
 /**
  * Context controls for Pi: `usage()` / `compact()` tools plus 40%/60%
- * context-pressure alerts. Sibling of notifications.ts (deliberately not
- * grown into it). Stock Pi public APIs only — no SDK patches, no settings
- * reads or changes (near-auto alerting is dropped for this slice because the
- * extension API exposes no settings).
+ * context-pressure alerts. Stock Pi public APIs only — no SDK patches, no
+ * settings reads or changes (near-auto alerting is dropped for this slice).
  *
- * Preparation is the model's responsibility, not the compact tool's: compact()
- * only REQUESTS native compaction. An accepted request is not success — the
- * confirmed outcome surfaces through usage() and lifecycle events. Continuation
- * after compaction belongs to the existing goal heartbeat; no resume daemon.
+ * compact() only REQUESTS native compaction; preparation is the model's job.
+ * `AgentSession.compact()` begins with `await this.abort()` and never resumes
+ * (dist/core/agent-session.js), so dispatch happens only from `agent_settled`
+ * (abort() is a no-op there). A compact call batched with sibling tool calls
+ * is rejected; an accepted sole call returns `terminate: true` — the agent
+ * core ends the run after a batch only when EVERY call sets it
+ * (pi-agent-core tool-placement.js) — so compaction starts at settle without
+ * killing sibling work. Duplicate/in-flight guards, stale-callback fences by
+ * session identity + generation, and requests are invalidated on session or
+ * branch replacement. Fulfillment is correlated by a request-time branch
+ * marker (entry count + leaf id): a native error string alone is never
+ * success, and only a real, LATER compaction on the SAME branch fulfills.
  *
- * ── Safe dispatch (source-verified against the installed SDK) ──
- * The extension context's compact() runs AgentSession.compact(), which begins
- * with `await this.abort()` (dist/core/agent-session.js) — it aborts the
- * current operation and does NOT resume it. Calling it inline from a running
- * tool would kill sibling mutations. Therefore dispatch always happens from
- * `agent_settled` — documented as fired after an agent run has fully settled,
- * when no retry/compaction/continuation will run, so the abort() inside
- * compact() is a no-op there.
- *
- * Tool-batch coordination (parent-approved refinement, source-verified):
- * - The assistant message's tool-call list is snapshotted from `message_end`
- *   (the full batch is known before any call executes).
- * - A compact request BATCHED WITH SIBLING tool calls is REJECTED with a clear
- *   retry-alone message — queued compaction must not hang over unrelated work.
- * - An accepted SOLE compact call returns `terminate: true` on its result;
- *   the agent-core honors early termination only when EVERY finalized call in
- *   the batch sets it (pi-agent-core dist/harness/runtime/drive/tool-placement.js:
- *   `completedCalls.every((call) => call.status === "completed" && call.terminate)`),
- *   and the extension tool wrapper passes the result through unchanged
- *   (dist/core/extensions/wrapper.js), so a sole compact call ends the run
- *   right after the batch and agent_settled dispatches immediately.
- * - If the batch snapshot is unavailable, acceptance still carries
- *   terminate:true and degrades safely to waiting for the run's natural
- *   settle — siblings without terminate simply prevent early termination.
- * Human pause/cancel/new-session intent is never overridden (aborting the run
- * is out of scope).
- *
- * ── Alerts (40% / 60% of the context window) ──
- * Per-LEVEL DELIVERED state: a level alerts at most once per epoch. Oscillation
- * around a threshold (39%→41%→39%→41%) never re-alerts; the epoch resets only
- * on session start, a model/window change, or the silent post-unknown
- * re-baseline after compaction (null usage). Crossings observed in one
- * evaluation are coalesced into ONE notice; notices are replaced, never
- * accumulated. Dual-channel delivery, both stock and turn-free:
- * - `tool_result`: the pending notice is appended to the next tool result's
- *   content (afterToolCall adopts extension content), so the model sees it
- *   during the ONGOING run — no wake message, no extra LLM turn.
- * - `before_agent_start`: fallback for notices that never met a tool result
- *   (the SDK appends the returned custom message to the next run's inputs).
- * sendUserMessage is never called by this file.
- *
- * ── usage() ──
- * Reports the SDK's ctx.getContextUsage() (tokens, configured window, percent),
- * distinguishing unavailable from zero and calling out the intentional
- * post-compaction null, plus the CONFIRMED outcome of the last compaction
- * (success/failure/abort — an accepted request is never reported as success).
+ * 40%/60% alerts: once per level per epoch. An epoch resets only on a
+ * CONFIRMED compaction entry (session_compact, by entry identity) or a
+ * model/window change; unknown (null) usage and decreases never reset it.
+ * Delivered levels are persisted per session and restored across same-epoch
+ * reload/resume. Crossings coalesce into one notice. Delivery is stock
+ * `pi.sendMessage(..., { triggerTurn: false })` at `turn_end`: the SDK
+ * flushes pending custom messages after turn_end handlers, so the very next
+ * model request — even a text-only response — sees the notice, with no extra
+ * turn and no tool-result mutation. sendUserMessage is never called.
  */
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 
 /** Alert levels, as percentages of the context window. */
 const LEVELS = [
 	{ id: "p40", percent: 40, label: "40%" },
 	{ id: "p60", percent: 60, label: "60%" },
 ];
+
+const ENTRY_TYPE = "context-controls-state";
 
 const fmtK = (tokens) =>
 	tokens >= 1000 ? `${Math.round(tokens / 100) / 10}k` : String(tokens);
@@ -78,26 +48,20 @@ export default function (pi) {
 	let generation = 0;
 
 	// ── compaction request state ──
-	// Current assistant-message tool-call batch (from message_end): the sole
-	// vs. sibling decision input for the compact tool.
 	let batchToolCalls = [];
-	// pending: an accepted-but-not-yet-dispatched request. Cleared by dispatch,
-	// by a native session_compact (auto fulfilled it), by any terminal
-	// callback, or by session replacement. Never left stranded.
-	let pending = null;
-	// True from dispatch until a terminal callback/event: blocks a second
-	// request racing into an already-running compaction operation.
-	let inFlight = false;
-	let lastCompaction = null;
+	let pending = null; // accepted request, awaiting agent_settled dispatch
+	let inFlight = false; // dispatched, awaiting a terminal callback/event
+	let lastCompaction = null; // latest confirmed truth (success/error/abort)
+	let notifiedKey = null; // dedupe: one outcome announcement per operation
+	let inFlightRequest = null; // the request object while dispatched
 
 	// ── alert state ──
 	let lastPercent = null; // consecutive-observation baseline
-	let sawUnknown = false; // null/unknown usage observed; next known value re-baselines silently
 	let lastWindow = null;
 	let lastModelId = null;
-	let deliveredLevels = new Set(); // per-epoch delivered levels — no threshold flapping
+	let deliveredLevels = new Set(); // per-epoch delivered levels
+	let epochMarker = null; // compaction entry id defining the current epoch
 	let pendingNotice = null; // replaced, never accumulated
-	let pendingOutcome = null; // confirmed compaction outcome notice — delivered once
 
 	const sessionOwner = (ctx = currentCtx) => {
 		try {
@@ -112,24 +76,64 @@ export default function (pi) {
 		lastCompaction = { outcome, at: Date.now(), detail };
 		pending = null;
 		inFlight = false;
-		notifyOutcome(lastCompaction);
+		notifyOutcome(`fail:${Date.now()}`, lastCompaction);
 	};
 
-	// Confirmed compaction outcome, surfaced to the returning model through the
-	// same turn-free channels as pressure alerts (tool_result append, else
-	// before_agent_start fallback). Delivered once, never accumulated.
-	const notifyOutcome = (compaction) => {
-		const when = new Date(compaction.at).toISOString();
-		pendingOutcome =
-			compaction.outcome === "success"
+	// Branch marker + correlation: only a compaction entry appended to the
+	// CURRENT branch AFTER the request (order, not timestamps) fulfills it.
+	const branchSnapshot = (ctx) => {
+		try {
+			const branch = ctx?.sessionManager?.getBranch?.();
+			if (!Array.isArray(branch)) return null;
+			return { count: branch.length, leafId: branch.at(-1)?.id ?? null };
+		} catch {
+			return null;
+		}
+	};
+
+	const fulfilledAfterRequest = (ctx, request) => {
+		if (!request.marker) return false; // marker unavailable: refuse
+		try {
+			const branch = ctx?.sessionManager?.getBranch?.();
+			if (!Array.isArray(branch)) return false;
+			if (branch.length < request.marker.count) return false; // branch replaced/shortened
+			if (request.marker.leafId !== null && branch[request.marker.count - 1]?.id !== request.marker.leafId) {
+				return false; // leaf changed: request belongs to another branch
+			}
+			for (let i = request.marker.count; i < branch.length; i++) {
+				if (branch[i]?.type === "compaction") return true;
+			}
+		} catch {
+			return false;
+		}
+		return false;
+	};
+
+	const notifyOutcome = (key, record) => {
+		if (notifiedKey === key) return; // one outcome per operation
+		notifiedKey = key;
+		lastCompaction = record;
+		const when = new Date(record.at).toISOString();
+		const text =
+			record.outcome === "success"
 				? `Compaction completed successfully at ${when}.`
-				: compaction.outcome === "aborted"
-					? `Compaction was aborted at ${when}.${compaction.detail ? ` ${compaction.detail}` : ""}`
-					: `Compaction FAILED at ${when}.${compaction.detail ? ` ${compaction.detail}` : ""}`;
+				: record.outcome === "aborted"
+					? `Compaction was aborted at ${when}.${record.detail ? ` ${record.detail}` : ""}`
+					: `Compaction FAILED at ${when}.${record.detail ? ` ${record.detail}` : ""}`;
+		// Simple no-turn confirmed-outcome channel: appended to session
+		// history immediately (or queued to the run flush mid-run) — the
+		// model sees it without any extra conversational turn.
+		try {
+			pi.sendMessage(
+				{ customType: "context-controls-notice", content: [{ type: "text", text }] },
+				{ triggerTurn: false },
+			);
+		} catch (err) {
+			console.error(`[context-controls] outcome delivery failed: ${err}`);
+		}
 	};
 
-	// Evaluation: per-epoch delivered state (level re-alerts only in a new
-	// epoch), multi-threshold jumps coalesced into one notice.
+	// ── alert evaluation ──
 	const evaluateAlerts = (ctx) => {
 		const usage = (() => {
 			try {
@@ -138,7 +142,7 @@ export default function (pi) {
 				return undefined;
 			}
 		})();
-		if (!usage) return; // no active model context: no chatter
+		if (!usage) return;
 		const modelId = (() => {
 			try {
 				return ctx?.model?.id ?? null;
@@ -149,39 +153,32 @@ export default function (pi) {
 		// Model/window change: new epoch, re-baseline silently.
 		if (lastWindow !== null && usage.contextWindow !== lastWindow) {
 			lastPercent = null;
-			sawUnknown = false;
 			deliveredLevels = new Set();
+			epochMarker = null;
 			pendingNotice = null;
 		}
 		if (lastModelId !== null && modelId !== null && modelId !== lastModelId) {
 			lastPercent = null;
-			sawUnknown = false;
 			deliveredLevels = new Set();
+			epochMarker = null;
 			pendingNotice = null;
 		}
 		lastWindow = usage.contextWindow ?? lastWindow;
 		lastModelId = modelId ?? lastModelId;
 		if (usage.tokens === null || typeof usage.tokens !== "number") {
-			// Unknown (e.g. right after compaction): stay silent and remember;
-			// the next known value starts a NEW epoch silently, so compaction
-			// followed by regrowth never re-emits 40/60 from stale state.
-			sawUnknown = true;
+			// Unknown (may happen post-compaction): never resets the epoch.
 			return;
 		}
 		const percent = typeof usage.percent === "number" ? usage.percent : (usage.tokens / usage.contextWindow) * 100;
-		if (sawUnknown) {
-			// Silent re-baseline after an unknown window; new epoch, no alert.
-			sawUnknown = false;
-			lastPercent = percent;
-			deliveredLevels = new Set();
-			return;
-		}
 		const prev = lastPercent;
 		lastPercent = percent;
 		if (prev === null) return; // first observation is the baseline
-		const crossed = LEVELS.filter((l) => prev < l.percent && percent >= l.percent && !deliveredLevels.has(l.id));
+		const crossed = LEVELS.filter(
+			(l) => prev < l.percent && percent >= l.percent && !deliveredLevels.has(l.id),
+		);
 		if (crossed.length === 0) return;
 		for (const l of crossed) deliveredLevels.add(l.id);
+		persistEpoch();
 		const parts = crossed.map((l) => l.label);
 		pendingNotice =
 			`Context pressure: usage crossed ${parts.join(" and ")} — now ${Math.round(percent)}% of the ` +
@@ -241,104 +238,136 @@ export default function (pi) {
 	// ── compaction dispatch ──
 	const dispatchPending = (ctx) => {
 		if (!pending) return;
-		// agent_settled should imply idle, but an earlier handler may have
-		// started a new run: do not dispatch (nor clear) into a running
-		// session — a later settle will dispatch instead.
 		try {
-			if (ctx?.isIdle?.() === false) return;
+			if (ctx?.isIdle?.() === false) return; // a new run started: wait for the next settle
 		} catch {
 			// idleness unknown: proceed (agent_settled remains the safe point)
 		}
 		const request = pending;
-		// Stale request after session replacement: drop silently.
 		if (request.owner !== sessionOwner(ctx)) {
 			pending = null;
 			return;
 		}
 		pending = null;
-		const actualCompactionAfterRequest = () => {
-			// Correlate a failure with an ACTUAL compaction appended to this same
-			// session branch AFTER the request (ordering by entry index, not
-			// timestamps — real entry timestamps are not epoch numbers). An error
-			// string alone ("Already compacted") is never treated as fulfillment.
-			try {
-				const entries = ctx?.sessionManager?.getEntries?.() ?? [];
-				for (let i = request.entryCount; i < entries.length; i++) {
-					if (entries[i]?.type === "compaction") return true;
-				}
-			} catch {
-				// Entry scan unavailable: no correlation evidence either way.
-			}
-			return false;
-		};
-		const finish = (outcome, detail, extra = {}) => {
-			// A stale callback (old era) must return BEFORE touching inFlight or
-			// any state belonging to the current era.
-			if (request.generation !== generation || request.owner !== sessionOwner(ctx)) return;
-			inFlight = false;
-			if (outcome === "error" && actualCompactionAfterRequest()) {
-				// The failure was a race with a real, later compaction in this
-				// session — report the correlated fulfillment truthfully.
-				lastCompaction = {
-					outcome: "success",
-					at: Date.now(),
-					detail: `request fulfilled by an actual compaction observed after it (${detail ?? "native error"})`,
-					...extra,
-				};
-			} else {
-				lastCompaction = { outcome, at: Date.now(), detail, ...extra };
-			}
-			notifyOutcome(lastCompaction);
-		};
+		// The handle for the operation currently dispatched: native terminal
+		// events clear it so our callbacks never double-record the same op.
+		inFlightRequest = request;
 		try {
-			// Set the in-flight guard BEFORE dispatch: a terminal callback that
-			// fires synchronously inside ctx.compact must already see it and
-			// clear it — never a stranded guard from a later overwrite.
 			inFlight = true;
 			ctx.compact({
 				customInstructions: request.customInstructions,
-				onComplete: (result) =>
-					finish("success", undefined, {
-						tokensBefore: result?.tokensBefore,
-						estimatedTokensAfter: result?.estimatedTokensAfter,
-					}),
+				onComplete: (result) => finish("success", undefined, {
+					tokensBefore: result?.tokensBefore,
+					estimatedTokensAfter: result?.estimatedTokensAfter,
+				}),
 				onError: (error) => finish("error", error?.message ?? String(error)),
 			});
 		} catch (err) {
-			// Stale extension context after reload/new-session must not strand state.
 			finish("error", err?.message ?? String(err));
 		}
+	};
+
+	// Terminal record for OUR dispatched operation. Stale-era callbacks and
+	// operations already recorded by their native event are skipped.
+	const finish = (outcome, detail, extra = {}) => {
+		const request = inFlightRequest;
+		if (!request) return;
+		inFlightRequest = null;
+		inFlight = false;
+		if (request.generation !== generation || request.owner !== sessionOwner(currentCtx)) return;
+		if (outcome === "error" && fulfilledAfterRequest(currentCtx, request)) {
+			notifyOutcome(`op:${request.generation}`, {
+				outcome: "success",
+				at: Date.now(),
+				detail: `request fulfilled by an actual compaction observed after it (${detail ?? "native error"})`,
+				...extra,
+			});
+			return;
+		}
+		notifyOutcome(`op:${request.generation}`, { outcome, at: Date.now(), detail, ...extra });
+	};
+
+	// ── epoch persistence (delivered levels survive same-epoch reload) ──
+	const persistEpoch = () => {
+		try {
+			pi.appendEntry(ENTRY_TYPE, {
+				owner: sessionOwner(),
+				epochMarker,
+				leafId: branchSnapshot(currentCtx)?.leafId ?? null,
+				delivered: [...deliveredLevels],
+			});
+		} catch {
+			// Ephemeral sessions: in-memory state still works.
+		}
+	};
+
+	const restoreEpoch = (ctx) => {
+		try {
+			const branch = ctx?.sessionManager?.getBranch?.();
+			if (!Array.isArray(branch)) return false;
+			const self = sessionOwner(ctx);
+			const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const e = entries[i];
+				if (e?.type !== "custom" || e?.customType !== ENTRY_TYPE) continue;
+				if (e?.data?.owner !== self) continue;
+				// The persisted epoch is valid only if its defining identity
+				// still exists on the current branch: the confirmed compaction
+				// entry, or (pre-compaction epochs) the persisted leaf entry.
+				const marker = e?.data?.epochMarker;
+				const leafId = e?.data?.leafId;
+				const markerOnBranch = typeof marker === "string" && branch.some((b) => b?.id === marker);
+				const leafOnBranch = typeof leafId === "string" && branch.some((b) => b?.id === leafId);
+				// Initial epoch (no compaction yet, empty branch): same-session
+				// reload keeps the epoch; anything else starts fresh.
+				if (!markerOnBranch && !leafOnBranch && !(marker === null && leafId === null)) return false;
+				deliveredLevels = new Set(
+					Array.isArray(e.data.delivered) ? e.data.delivered.filter((x) => typeof x === "string") : [],
+				);
+				epochMarker = marker;
+				return true;
+			}
+		} catch {
+			return false;
+		}
+		return false;
 	};
 
 	pi.on("session_start", (event, ctx) => {
 		currentCtx = ctx ?? null;
 		owner = sessionOwner(ctx);
 		generation += 1;
-		// Fresh baseline per session instance: reload/resume/fork must not
-		// replay old alerts or resurrect a stale compaction request.
 		pending = null;
 		inFlight = false;
 		lastCompaction = null;
 		pendingNotice = null;
-		pendingOutcome = null;
+		notifiedKey = null;
 		lastPercent = null;
-		sawUnknown = false;
-		deliveredLevels = new Set();
 		lastWindow = null;
 		lastModelId = null;
+		// Same-epoch reload/resume keeps delivered announcements; new/fork
+		// sessions (or a stale epoch) start fresh.
+		const reason = event?.reason;
+		const restored = (reason === "reload" || reason === "resume") && restoreEpoch(ctx);
+		if (!restored) {
+			deliveredLevels = new Set();
+			epochMarker = null;
+		}
 	});
 	pi.on("session_shutdown", () => {
-		// Invalidate the old era: queued requests, in-flight guards and pending
-		// notices must not leak across shutdown.
 		pending = null;
 		inFlight = false;
 		pendingNotice = null;
-		pendingOutcome = null;
+		notifiedKey = null;
 		generation += 1;
 		currentCtx = null;
 	});
+	pi.on("session_before_switch", () => {
+		// Branch replacement invalidates any queued request for this era.
+		pending = null;
+		inFlight = false;
+	});
 	pi.on("message_end", (event, _ctx) => {
-		// Snapshot the assistant message's full tool-call batch before tools run.
 		const message = event?.message;
 		if (message?.role === "assistant") {
 			batchToolCalls = Array.isArray(message.content)
@@ -349,6 +378,20 @@ export default function (pi) {
 	pi.on("turn_end", (_event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
 		evaluateAlerts(ctx);
+		// Stock flush: pending custom messages sent here reach the immediately
+		// next model request without creating a turn or touching tool results.
+		const notice = pendingNotice;
+		if (notice) {
+			try {
+				pi.sendMessage(
+					{ customType: "context-controls-notice", content: [{ type: "text", text: notice }] },
+					{ triggerTurn: false },
+				);
+			} catch (err) {
+				console.error(`[context-controls] notice delivery failed: ${err}`);
+			}
+			pendingNotice = null;
+		}
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
@@ -356,55 +399,51 @@ export default function (pi) {
 	});
 	pi.on("session_compact", (event, _ctx) => {
 		// Native truth (ours or auto). Clears any pending request so a queued
-		// dispatch never double-compacts an already-compacted session.
+		// dispatch never double-compacts, and starts a NEW alert epoch by the
+		// confirmed entry identity.
+		const entryId = typeof event?.compactionEntry?.id === "string" ? event.compactionEntry.id : null;
 		pending = null;
-		inFlight = false;
+		const key = entryId ? `entry:${entryId}` : `native:${Date.now()}`;
 		lastCompaction = {
 			outcome: "success",
 			at: Date.now(),
 			tokensBefore: event?.compactionEntry?.tokensBefore,
 			detail: "confirmed by session_compact",
 		};
-		notifyOutcome(lastCompaction);
-		// A pressure notice raised before compaction is stale history now —
-		// drop it rather than delivering obsolete context.
+		inFlightRequest = null;
+		inFlight = false;
+		notifyOutcome(key, lastCompaction);
+		// New epoch by confirmed entry identity: levels may announce again as
+		// usage regrows. A stale pre-compaction pressure notice is dropped.
+		deliveredLevels = new Set();
+		epochMarker = entryId;
 		pendingNotice = null;
+		persistEpoch();
 	});
 	pi.on("session_compact_failed", (event, _ctx) => {
-		recordFailure(event?.aborted ? "aborted" : "error", event?.errorMessage ?? "compaction failed or was aborted");
+		const detail = event?.errorMessage ?? "compaction failed or was aborted";
+		const outcome = event?.aborted ? "aborted" : "error";
+		if (inFlightRequest) {
+			// The native failure for OUR dispatched operation: record it here;
+			// the wrapped onError/onComplete is deduplicated against this.
+			const request = inFlightRequest;
+			inFlightRequest = null;
+			inFlight = false;
+			if (request.generation !== generation || request.owner !== sessionOwner(currentCtx)) return;
+			if (outcome !== "aborted" && fulfilledAfterRequest(currentCtx, request)) {
+				notifyOutcome(`op:${request.generation}`, {
+					outcome: "success",
+					at: Date.now(),
+					detail: `request fulfilled by an actual compaction observed after it (${detail})`,
+				});
+				return;
+			}
+			notifyOutcome(`op:${request.generation}`, { outcome, at: Date.now(), detail });
+			return;
+		}
+		recordFailure(outcome, detail);
 	});
 
-	// Mid-run delivery: append the pending notice (pressure alert or confirmed
-	// compaction outcome) to the NEXT tool result's content (the SDK adopts
-	// extension tool_result content). The model sees it during the ongoing run
-	// — no wake message, no extra LLM turn, nothing accumulated.
-	pi.on("tool_result", (event, _ctx) => {
-		const notice = pendingNotice ?? pendingOutcome;
-		if (!notice) return undefined;
-		pendingNotice = null;
-		pendingOutcome = null;
-		return {
-			content: [...(Array.isArray(event?.content) ? event.content : []), { type: "text", text: notice }],
-		};
-	});
-
-	// Fallback delivery: a notice that never met a tool result (e.g. raised by
-	// the final turn of a run) rides along with the next run's inputs — still
-	// no extra turn, still delivered once.
-	pi.on("before_agent_start", (_event, _ctx) => {
-		const notice = pendingNotice ?? pendingOutcome;
-		if (!notice) return undefined;
-		pendingNotice = null;
-		pendingOutcome = null;
-		return {
-			message: {
-				customType: "context-controls-notice",
-				content: [{ type: "text", text: notice }],
-			},
-		};
-	});
-
-	// ── model-callable tools ──
 	pi.registerTool({
 		name: "usage",
 		label: "Context Usage",
@@ -451,9 +490,6 @@ export default function (pi) {
 					details: { ok: false, duplicate: true, inFlight },
 				};
 			}
-			// Reject a compact call mixed with sibling tool calls: queued
-			// compaction must not hang over unrelated sibling work. (The SDK
-			// would ignore terminate anyway unless EVERY call in the batch sets it.)
 			if (batchToolCalls.length > 1) {
 				return {
 					content: [
@@ -470,14 +506,13 @@ export default function (pi) {
 				};
 			}
 			const focus = typeof params?.summaryFocus === "string" && params.summaryFocus.trim() ? params.summaryFocus.trim() : undefined;
-		let entryCount = 0;
-		try {
-			const entries = ctx?.sessionManager?.getEntries?.();
-			entryCount = Array.isArray(entries) ? entries.length : 0;
-		} catch {
-			entryCount = 0;
-		}
-		pending = { owner: sessionOwner(ctx), generation: ++generation, at: Date.now(), entryCount, customInstructions: focus };
+			const marker = branchSnapshot(ctx);
+			pending = {
+				owner: sessionOwner(ctx),
+				generation: ++generation,
+				marker,
+				customInstructions: focus,
+			};
 			return {
 				content: [
 					{
@@ -491,14 +526,8 @@ export default function (pi) {
 					},
 				],
 				details: { ok: true, accepted: true, dispatched: false, terminate: true },
-				// Ends the run right after this (sole) tool batch; agent_settled
-				// then dispatches. Honored by the SDK only when every call in the
-				// batch sets it — which is exactly the accepted case.
 				terminate: true,
 			};
 		},
 	});
-
-	// Returned for the parent's future wiring; harmless if unused.
-	return { __owner: () => owner };
 }

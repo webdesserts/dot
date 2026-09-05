@@ -66,7 +66,10 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	assert.ok(extension.handlers.has("turn_end"), "alert evaluation handler registered");
 	assert.ok(extension.handlers.has("agent_settled"), "dispatch handler registered");
 	assert.ok(extension.handlers.has("session_compact"), "native compaction handler registered");
-	assert.ok(extension.handlers.has("before_agent_start"), "notice delivery handler registered");
+	// Stock no-turn delivery only: no tool-result mutation, no
+	// before_agent_start fallback.
+	assert.equal(extension.handlers.get("tool_result"), undefined, "tool results are never mutated");
+	assert.equal(extension.handlers.get("before_agent_start"), undefined, "no fallback delivery channel");
 
 	// TypeBox schemas: no stale/extra parameters.
 	assert.deepEqual(toolDef.parameters.properties, {}, "usage takes no parameters");
@@ -113,19 +116,15 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	assert.equal(rejected.details.rejected, "siblings");
 	assert.equal(rejected.terminate, undefined);
 
-	// Alerts: real turn_end evaluation and before_agent_start delivery, and
-	// the extension never calls sendUserMessage (which would wake the model).
+	// Alerts: real turn_end evaluation; delivery is stock pi.sendMessage
+	// with triggerTurn:false (the SDK flushes it into the immediately next
+	// model request). The extension never calls sendUserMessage (which would
+	// wake the model) and never mutates tool results.
 	const sent = [];
 	const piProbe = { sendUserMessage: (...a) => sent.push(a) };
 	state.usage = { tokens: 50_000, contextWindow: 200_000, percent: 25 };
 	extension.handlers.get("turn_end")[0]({}, ctx);
 	state.usage = { tokens: 170_000, contextWindow: 200_000, percent: 85 };
 	extension.handlers.get("turn_end")[0]({}, ctx);
-	const notice = extension.handlers.get("before_agent_start")[0]({}, ctx);
-	assert.ok(notice?.message, "notice pending for next turn");
-	assert.equal(notice.message.customType, "context-controls-notice");
-	assert.match(notice.message.content[0].text, /40%/);
-	assert.match(notice.message.content[0].text, /60%/);
-	assert.equal(extension.handlers.get("before_agent_start")[0]({}, ctx), undefined, "delivered once");
 	assert.equal(sent.length, 0, "no wake message, no extra LLM turn");
 });

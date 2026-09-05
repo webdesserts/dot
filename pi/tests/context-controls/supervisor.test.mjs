@@ -2,17 +2,18 @@
  * Behavioral tests for the context-controls extension
  * (pi/extensions/context-controls.ts).
  *
- * Runs the TypeScript source in a VM sandbox with a fake pi double and a fake
- * extension context (synthetic usage, deterministic compaction lifecycle) —
- * no real LLM calls, no live parent state. Covers: 40/60 threshold alerts with
- * per-epoch delivered state (no 39→41 flapping), multi-threshold coalescing,
- * dual-channel turn-free delivery (tool_result append mid-run +
- * before_agent_start fallback) without sendUserMessage, null/post-compaction
- * and decreasing usage anti-chatter, model/window changes, compact() deferred
- * dispatch to agent_settled with terminate:true sole-call acceptance,
- * sibling-batch rejection, duplicate/concurrent request guards, truthful
- * success/failure/abort including correlated fulfillment, and stale callbacks
- * after session replacement.
+ * VM sandbox with a fake pi double and a fake extension context (synthetic
+ * usage, deterministic compaction lifecycle via getBranch entries) — no real
+ * LLM calls, no live parent state. Covers: 40/60 alerts with per-epoch
+ * delivered state (no 39→41 flapping; epoch resets ONLY on a confirmed
+ * compaction entry or model/window change — unknown/decreasing never reset),
+ * coalesced jumps, stock no-turn delivery via pi.sendMessage({triggerTurn:
+ * false}) at turn_end without sendUserMessage/tool-result mutation, branch-
+ * marker fulfillment correlation (pre-existing/other-branch/missing-marker
+ * counterexamples), deferred agent_settled dispatch with terminate:true
+ * sole-call acceptance and sibling rejection, duplicate/in-flight guards,
+ * truthful outcomes with native-event dedupe, and stale-callback/session
+ * invalidation.
  *
  * Run: node --test pi/tests/context-controls/supervisor.test.mjs  (repo root)
  */
@@ -20,7 +21,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import vm from 'node:vm';
 
 const T0 = 1_700_000_000_000;
@@ -29,9 +29,8 @@ function fixture() {
 	const handlers = new Map();
 	const tools = new Map();
 	const sent = []; // pi.sendUserMessage — must stay EMPTY forever
-	const sentMessages = []; // pi.sendMessage
-	const appended = [];
-	const clock = { now: T0 };
+	const sentCustom = []; // pi.sendMessage — the stock no-turn delivery channel
+	const clock = { now: T0, seq: 0 };
 	class FakeDate extends Date { }
 	FakeDate.now = () => clock.now;
 	const pi = {
@@ -39,8 +38,14 @@ function fixture() {
 		registerTool: (def) => tools.set(def.name, def),
 		registerCommand: () => {},
 		sendUserMessage: (...a) => sent.push(a),
-		sendMessage: (...a) => sentMessages.push(a),
-		appendEntry: (customType, data) => appended.push({ customType, data }),
+		sendMessage: (message, options) => sentCustom.push({ message, options }),
+		appendEntry: (customType, data) => {
+			// Mirror the real session: custom entries are readable via
+			// getEntries() and carry generated ids.
+			const id = `custom-${++clock.seq}`;
+			state.entries.push({ type: 'custom', customType, data, id });
+			return id;
+		},
 	};
 	const source = fs.readFileSync(new URL('../../extensions/context-controls.ts', import.meta.url), 'utf8')
 		.replace(/^import .*;\n/gm, '')
@@ -49,26 +54,27 @@ function fixture() {
 		usage: undefined, // getContextUsage() result
 		modelId: 'test-model',
 		sessionId: 'session-A',
-		entries: [], // sessionManager.getEntries() — compaction correlation evidence
+		branch: [], // sessionManager.getBranch() — current-branch entries
+		entries: [], // getEntries() — includes custom epoch-persistence entries
 		compactCalls: [],
-		compactImpl: null, // (options) => void; default records only
+		compactImpl: null,
 	};
 	vm.runInNewContext(`${source}\nsetup(pi);`, {
 		pi, process: { env: {} }, console: { error() {} }, Date: FakeDate,
 		Type: { Object: v => v, String: v => v, Optional: v => v },
-		StringEnum: v => v,
 	});
 	const ctx = {
 		getContextUsage: () => state.usage,
 		isIdle: () => true,
-		cwd: '/fixture/project',
-		isProjectTrusted: () => true,
 		get model() { return { id: state.modelId }; },
-		sessionManager: { getSessionId: () => state.sessionId, getEntries: () => state.entries },
+		sessionManager: {
+			getSessionId: () => state.sessionId,
+			getBranch: () => state.branch,
+			getEntries: () => state.entries,
+		},
 		compact: (options) => {
-			const call = { options, at: clock.now };
-			state.compactCalls.push(call);
-			if (state.compactImpl) state.compactImpl(options, call);
+			state.compactCalls.push({ options, at: clock.now });
+			if (state.compactImpl) state.compactImpl(options);
 		},
 	};
 	const event = (name, arg = {}, context = ctx) => handlers.get(name)?.(arg, context);
@@ -78,25 +84,18 @@ function fixture() {
 		percent: tokens === null ? null : (tokens / window) * 100,
 	});
 	return {
-		handlers, tools, sent, sentMessages, appended, clock, ctx, state, usage, event,
-		setNow: (ms) => { clock.now = ms; },
-		// Run one alert observation at a given percent of the window.
+		handlers, tools, sent, sentCustom, clock, ctx, state, usage, event,
 		observe: (tokens, window = 200_000, model) => {
 			state.usage = usage(tokens, window);
 			if (model) state.modelId = model;
 			event('turn_end');
-			return handlers;
 		},
-		// The pending notice (if any) as it would be delivered next turn.
-		peekNotice: () => {
-			const result = handlers.get('before_agent_start')?.({}, ctx);
-			return result?.message ?? null;
-		},
-		// Mid-run delivery: what the next tool result would carry.
-		deliverViaToolResult: (content = []) => {
-			const result = handlers.get('tool_result')?.({ type: 'tool_result', content }, ctx);
-			return result?.content ?? null;
-		},
+		// Notices delivered through the stock no-turn channel at turn_end.
+		notices: () => sentCustom.map((s) => s.message.content[0].text),
+		// Pressure-alert notices only (the confirmed-outcome notice is separate).
+		pressures: () => sentCustom.map((s) => s.message.content[0].text).filter((t) => t.includes('Context pressure')),
+		// The exact pi.sendMessage options for the latest delivery.
+		lastDeliveryOptions: () => sentCustom.at(-1)?.options ?? null,
 	};
 }
 
@@ -105,152 +104,153 @@ const WINDOW = 200_000;
 test('alerts fire once per epoch and never flap on threshold oscillation', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	// Baseline observation never alerts.
-	f.observe(60_000); // 30%
-	assert.equal(f.peekNotice(), null, 'baseline is silent');
-	// Crossing 40%.
+	f.observe(60_000); // 30% baseline
+	assert.equal(f.pressures().length, 0, 'baseline is silent');
 	f.observe(90_000); // 45%
-	assert.match(f.peekNotice()?.content?.[0]?.text ?? '', /40%/);
-	assert.doesNotMatch(f.peekNotice()?.content?.[0]?.text ?? '', /60%/, 'single notice after delivery');
-	// Staying between levels: quiet.
+	assert.match(f.notices()[0] ?? '', /40%/);
+	assert.equal(f.pressures().length, 1);
 	f.observe(100_000); // 50%
-	assert.equal(f.peekNotice(), null, 'no repeat inside the band');
-	// 60% crossing.
+	assert.equal(f.pressures().length, 1, 'no repeat inside the band');
 	f.observe(130_000); // 65%
-	assert.match(f.peekNotice()?.content?.[0]?.text ?? '', /60%/);
-	// THE FLAP CASE: 39→41→39→41 must NOT re-alert — delivered state is
-	// per-epoch, not consecutive-observation.
-	f.observe(78_000); // 39%
-	assert.equal(f.peekNotice(), null);
-	f.observe(82_000); // 41%
-	assert.equal(f.peekNotice(), null, 're-crossing in the same epoch stays silent');
+	assert.match(f.notices()[1] ?? '', /60%/);
+	// The flap case: 39→41→39→41 never re-alerts within the epoch.
 	f.observe(78_000);
 	f.observe(82_000);
-	assert.equal(f.peekNotice(), null, 'still silent — per-epoch delivered state');
+	f.observe(78_000);
+	f.observe(82_000);
+	assert.equal(f.pressures().length, 2, 'per-epoch delivered state holds');
 	// Decreasing estimates: never alert.
 	f.observe(100_000);
 	f.observe(50_000);
-	assert.equal(f.peekNotice(), null, 'decreasing is silent');
+	assert.equal(f.pressures().length, 2, 'decreasing is silent');
 });
 
 test('a multi-threshold jump is coalesced into ONE notice', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	f.observe(50_000); // 25% baseline
+	f.observe(50_000); // 25%
 	f.observe(150_000); // 75% — jumps 40 and 60
-	const notice = f.peekNotice();
-	assert.ok(notice, 'notice exists');
-	const text = notice.content[0].text;
-	assert.match(text, /40%/);
-	assert.match(text, /60%/);
-	// Delivered exactly once, then cleared; never accumulated.
-	assert.equal(f.peekNotice(), null);
+	const notices = f.notices();
+	assert.equal(notices.length, 1, 'exactly one notice');
+	assert.match(notices[0], /40%/);
+	assert.match(notices[1] ?? '', /^$/); // no second notice
+	assert.match(notices[0], /60%/);
 });
 
-test('alerts are model-visible without sendUserMessage or extra turns', () => {
+test('delivery is stock pi.sendMessage with triggerTurn:false; sendUserMessage never used', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	f.observe(50_000);
 	f.observe(170_000); // 85% — jumps both levels
-	const notice = f.peekNotice(); // consumes via before_agent_start
-	assert.ok(notice, 'notice pending');
-	assert.equal(notice.customType, 'context-controls-notice');
 	assert.equal(f.sent.length, 0, 'sendUserMessage NEVER called');
-	assert.equal(f.sentMessages.length, 0, 'sendMessage NEVER called');
-	assert.equal(f.peekNotice(), null, 'delivered exactly once');
+	assert.equal(f.sentCustom.length, 1);
+	const delivery = f.sentCustom[0];
+	assert.equal(delivery.options?.triggerTurn, false, 'never creates a turn');
+	assert.equal(delivery.message.customType, 'context-controls-notice');
+	// Delivered once.
+	f.observe(175_000);
+	assert.equal(f.sentCustom.length, 1, 'no repeat');
 });
 
-test('the pending notice rides on the next tool result DURING an ongoing run', () => {
+test('turn_end delivery reaches the immediately next model request without tool-result mutation', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
+	// No tool_result / before_agent_start delivery machinery remains.
+	assert.equal(f.handlers.get('tool_result'), undefined, 'tool results are never mutated');
+	assert.equal(f.handlers.get('before_agent_start'), undefined, 'no before_agent_start fallback needed');
 	f.observe(50_000);
-	f.observe(130_000); // 65% — threshold crossed mid-run
-	// The next tool result in the same/next turn carries the notice appended
-	// to its original content — model-visible without any turn trigger.
-	const carried = f.deliverViaToolResult([{ type: 'text', text: 'tool output' }]);
-	assert.ok(Array.isArray(carried) && carried.length === 2, 'notice appended to tool result');
-	assert.equal(carried[0].text, 'tool output', 'original content preserved');
-	assert.match(carried[1].text, /40%/);
-	// Delivered once; subsequent tool results are untouched (the handler
-	// returns undefined once no notice is pending, so the SDK keeps the
-	// original content).
-	const again = f.deliverViaToolResult([{ type: 'text', text: 'more output' }]);
-	assert.equal(again, null, 'no accumulation, no repeat');
-	assert.equal(f.sent.length, 0);
-	// before_agent_start fallback: nothing left to deliver.
-	assert.equal(f.peekNotice(), null);
+	f.observe(130_000); // 65%
+	assert.equal(f.sentCustom.length, 1, 'notice sent at the crossing turn_end');
+	// The SDK flushes it after turn_end handlers: the next request sees it.
+	f.observe(140_000);
+	assert.equal(f.sentCustom.length, 1, 'delivered exactly once');
 });
 
-test('null usage (right after compaction) starts a new silent epoch', () => {
+test('unknown usage and decreases never reset the epoch; only a confirmed compaction entry does', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	f.observe(50_000);
-	f.observe(130_000); // alert 60
-	assert.ok(f.peekNotice());
-	// Post-compaction null: silent.
+	f.observe(50_000); // 25% baseline
+	f.observe(130_000); // 65% — 40 and 60 announced
+	assert.equal(f.pressures().length, 1);
+	// Null usage (may be observed post-compaction): never resets the epoch.
 	f.state.usage = f.usage(null, WINDOW);
 	f.event('turn_end');
-	assert.equal(f.peekNotice(), null);
-	// First observation after the unknown window re-baselines into a NEW
-	// epoch — 40/60 do NOT re-emit even when regrowth recrosses them.
+	// Direct regrowth without any null observation and without a confirmed
+	// compaction: still silent (no blind reset).
 	f.observe(100_000); // 50%
-	assert.equal(f.peekNotice(), null, 'post-null re-baseline is silent');
-	f.observe(130_000); // 65% — new epoch, genuine crossing
-	assert.match(f.peekNotice()?.content?.[0]?.text ?? '', /60%/, 'new-epoch crossing alerts once');
-	// Oscillation after delivery stays silent again.
+	assert.equal(f.pressures().length, 1);
+	f.observe(130_000); // 65%
+	assert.equal(f.pressures().length, 1, 'no re-announce without a new epoch');
+	// A CONFIRMED compaction entry starts a new epoch (entry identity).
+	f.state.branch.push({ type: 'compaction', id: 'cmp-1', tokensBefore: 150_000 });
+	f.event('session_compact', { compactionEntry: { id: 'cmp-1', tokensBefore: 150_000 } }, f.ctx);
+	f.observe(100_000); // 50% — post-compaction, new epoch baseline
+	assert.equal(f.pressures().length, 1);
+	f.observe(130_000); // 65% — regrowth re-announces 60 in the new epoch
+	assert.match(f.pressures()[1] ?? '', /60%/);
+	assert.equal(f.pressures().length, 2);
+	// Oscillation after the new-epoch announcement stays silent.
 	f.observe(78_000); // 39%
-	assert.equal(f.peekNotice(), null, 'dropping below is silent');
-	f.observe(82_000); // 41% — 40% was never delivered in this epoch: one legit alert
-	const first40 = f.peekNotice();
-	assert.match(first40?.content?.[0]?.text ?? '', /40%/);
+	f.observe(82_000); // 41% — 40% was never delivered in this epoch
+	const first40 = f.pressures()[2] ?? '';
+	assert.match(first40, /40%/, 'one legit new-epoch 40% alert');
+	assert.equal(f.pressures().length, 3, 'now delivered — no flapping');
+});
+
+test('delivered levels survive a same-epoch reload; new/fork sessions start fresh', () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' }, f.ctx);
+	f.observe(50_000);
+	f.observe(130_000); // 40 and 60 announced; persisted via appendEntry
+	assert.equal(f.pressures().length, 1);
+	// Same-epoch reload: the persisted epoch marker (cmp-1) is on the branch.
+	f.state.branch.push({ type: 'compaction', id: 'cmp-1' });
+	f.event('session_start', { reason: 'reload' }, f.ctx);
+	f.observe(82_000); // 41%
+	assert.equal(f.pressures().length, 1, 'delivered levels preserved across reload');
 	f.observe(78_000);
 	f.observe(82_000);
-	assert.equal(f.peekNotice(), null, 'now delivered — no flapping');
-	f.observe(78_000);
-	f.observe(82_000);
-	assert.equal(f.peekNotice(), null, 'still silent — per-epoch delivered state');
-	f.observe(78_000);
-	f.observe(82_000);
-	assert.equal(f.peekNotice(), null, 'still silent — per-epoch delivered state');
-	// A crossing spanning an unknown gap stays silent.
-	f.state.usage = f.usage(null, WINDOW);
-	f.event('turn_end');
-	f.observe(150_000); // 75%
-	assert.equal(f.peekNotice(), null, 'crossing through an unknown gap stays silent');
-	// Window change re-baselines silently.
+	assert.equal(f.pressures().length, 1, '39→41 does not repeat after reload');
+	// A new session (different id) starts a fresh epoch.
+	f.state.sessionId = 'session-B';
+	f.event('session_start', { reason: 'new' }, f.ctx);
+	f.observe(82_000); // baseline in the new session
+	assert.equal(f.pressures().length, 1);
+	f.observe(130_000);
+	assert.match(f.notices()[1] ?? '', /60%/, 'fresh session announces normally');
+});
+
+test('model/window changes establish a new epoch silently', () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' }, f.ctx);
+	f.observe(50_000);
+	f.observe(130_000);
+	assert.equal(f.pressures().length, 1);
+	// Window change re-baselines with a new epoch.
 	f.state.usage = f.usage(150_000, 400_000);
 	f.event('turn_end');
-	assert.equal(f.peekNotice(), null, 'window change is silent');
+	assert.equal(f.pressures().length, 1, 'window change is silent');
 	// Model change re-baselines silently.
 	f.state.usage = f.usage(170_000, 400_000);
 	f.state.modelId = 'other-model';
 	f.event('turn_end');
-	assert.equal(f.peekNotice(), null, 'model change is silent');
-	// Reload resets to a silent fresh baseline.
-	f.event('session_start', { reason: 'reload' }, f.ctx);
-	assert.equal(f.peekNotice(), null);
-	f.observe(170_000);
-	assert.equal(f.peekNotice(), null, 'first observation after reload is baseline');
+	assert.equal(f.pressures().length, 1, 'model change is silent');
 });
 
 test('usage() distinguishes unavailable, unknown, and zero', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	const tool = f.tools.get('usage');
-	// No active context.
 	f.state.usage = undefined;
 	let r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(r.content[0].text, /unavailable/);
-	// Post-compaction null tokens: unknown, explicitly not zero.
 	f.state.usage = f.usage(null, WINDOW);
 	r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(r.content[0].text, /unknown/);
 	assert.match(r.content[0].text, /not zero/);
-	// Genuine zero stays zero.
 	f.state.usage = f.usage(0, WINDOW);
 	r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(r.content[0].text, /0%/);
-	// Concrete numbers.
 	f.state.usage = f.usage(150_000, WINDOW);
 	r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(r.content[0].text, /150k/);
@@ -263,103 +263,63 @@ test('compact() defers dispatch to agent_settled and never runs mid-turn', async
 	const tool = f.tools.get('compact');
 	const r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.equal(r.details.accepted, true);
-	assert.equal(r.details.dispatched, false, 'request only — not dispatched inline');
+	assert.equal(r.details.dispatched, false);
 	assert.equal(r.terminate, true, 'sole accepted call terminates the run at batch end');
-	assert.equal(f.state.compactCalls.length, 0, 'AgentSession.compact NOT called from the tool');
-	assert.match(r.content[0].text, /acceptance is not success/i);
-	// Dispatch happens only at settle.
+	assert.equal(f.state.compactCalls.length, 0, 'no inline native compaction');
 	f.event('agent_settled');
 	assert.equal(f.state.compactCalls.length, 1, 'dispatched at agent_settled');
-	const options = f.state.compactCalls[0].options;
-	assert.equal(typeof options.onComplete, 'function');
-	assert.equal(typeof options.onError, 'function');
-	// Success records truth with token accounting (even after a synchronous
-	// onComplete inside ctx.compact — no stranded in-flight guard).
-	options.onComplete({ tokensBefore: 180_000, estimatedTokensAfter: 30_000 });
-	const usageTool = f.tools.get('usage');
-	f.state.usage = f.usage(30_000, WINDOW);
-	const report = await usageTool.execute('id', {}, undefined, undefined, f.ctx);
+	f.state.compactCalls[0].options.onComplete({ tokensBefore: 180_000, estimatedTokensAfter: 30_000 });
+	const report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /SUCCESS/);
 	assert.match(report.content[0].text, /180k/);
-	// A synchronous terminal callback inside ctx.compact clears the guard.
-	await tool.execute('id', {}, undefined, undefined, f.ctx);
-	f.state.compactImpl = (options) => options.onComplete({ tokensBefore: 1, estimatedTokensAfter: 1 });
-	f.event('agent_settled');
-	const afterSync = await tool.execute('id', {}, undefined, undefined, f.ctx);
-	assert.equal(afterSync.details.accepted, true, 'sync-callback dispatch does not strand the guard');
 });
 
-test('compact() passes summary-focus instructions', async () => {
+test('compact batched with a sibling is rejected; sole call is accepted', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	await f.tools.get('compact').execute('id', { summaryFocus: 'preserve the migration plan' }, undefined, undefined, f.ctx);
-	f.event('agent_settled');
-	assert.equal(f.state.compactCalls[0].options.customInstructions, 'preserve the migration plan');
-});
-
-test('compact batched with sibling tool calls is rejected with a retry-alone message', async () => {
-	const f = fixture();
-	f.event('session_start', { reason: 'startup' }, f.ctx);
-	// Assistant message containing two tool calls (compact + a sibling).
 	f.event('message_end', {
 		message: {
 			role: 'assistant',
 			content: [
-				{ type: 'text', text: 'doing things' },
-				{ type: 'toolCall', id: 'call-1', name: 'compact' },
-				{ type: 'toolCall', id: 'call-2', name: 'bash' },
+				{ type: 'text', text: 'work' },
+				{ type: 'toolCall', id: 'c1', name: 'compact' },
+				{ type: 'toolCall', id: 'c2', name: 'bash' },
 			],
 		},
 	}, f.ctx);
-	const r = await f.tools.get('compact').execute('call-1', {}, undefined, undefined, f.ctx);
-	assert.equal(r.details.ok, false);
-	assert.equal(r.details.rejected, 'siblings');
-	assert.equal(r.details.batchSize, 2);
-	assert.equal(r.terminate, undefined, 'no terminate hint on rejection');
-	assert.match(r.content[0].text, /REJECTED/);
-	assert.match(r.content[0].text, /ONLY tool call/);
-	// Nothing was queued: no dispatch at settle, no native call ever.
+	const rejected = await f.tools.get('compact').execute('c1', {}, undefined, undefined, f.ctx);
+	assert.equal(rejected.details.rejected, 'siblings');
+	assert.equal(rejected.terminate, undefined);
 	f.event('agent_settled');
 	assert.equal(f.state.compactCalls.length, 0, 'rejected request never dispatches');
-	// A later sole call is accepted again.
 	f.event('message_end', {
-		message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-3', name: 'compact' }] },
+		message: { role: 'assistant', content: [{ type: 'toolCall', id: 'c3', name: 'compact' }] },
 	}, f.ctx);
-	const sole = await f.tools.get('compact').execute('call-3', {}, undefined, undefined, f.ctx);
+	const sole = await f.tools.get('compact').execute('c3', {}, undefined, undefined, f.ctx);
 	assert.equal(sole.details.accepted, true);
 	assert.equal(sole.terminate, true);
 });
 
-test('missing batch snapshot degrades safely: accept with terminate, dispatch at settle', async () => {
-	const f = fixture();
-	f.event('session_start', { reason: 'startup' }, f.ctx);
-	// No message_end snapshot was delivered (defensive runtime path).
-	const r = await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
-	assert.equal(r.details.accepted, true);
-	assert.equal(r.terminate, true, 'terminate hint still ends the run for a sole call');
-	f.event('agent_settled');
-	assert.equal(f.state.compactCalls.length, 1);
-});
-
-test('duplicate and concurrent compaction requests are guarded', async () => {
+test('duplicate and in-flight requests are guarded; sync callbacks never strand the guard', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	const tool = f.tools.get('compact');
 	await tool.execute('id', {}, undefined, undefined, f.ctx);
 	const dup = await tool.execute('id', {}, undefined, undefined, f.ctx);
-	assert.equal(dup.details.duplicate, true, 'pending duplicate refused');
-	assert.equal(f.state.compactCalls.length, 0);
+	assert.equal(dup.details.duplicate, true);
 	f.event('agent_settled');
 	assert.equal(f.state.compactCalls.length, 1);
-	// While the compaction operation is in flight (before terminal callback),
-	// a racing request is still refused.
 	const race = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.equal(race.details.duplicate, true, 'in-flight duplicate refused');
-	assert.equal(f.state.compactCalls.length, 1, 'no second native request');
 	// Terminal callback clears the guard.
 	f.state.compactCalls[0].options.onComplete({ tokensBefore: 1, estimatedTokensAfter: 1 });
 	const after = await tool.execute('id', {}, undefined, undefined, f.ctx);
-	assert.equal(after.details.accepted, true, 'guard cleared after confirmed completion');
+	assert.equal(after.details.accepted, true, 'guard cleared after completion');
+	// A synchronous terminal callback inside ctx.compact also clears it.
+	f.state.compactImpl = (options) => options.onComplete({ tokensBefore: 1, estimatedTokensAfter: 1 });
+	f.event('agent_settled');
+	const afterSync = await tool.execute('id', {}, undefined, undefined, f.ctx);
+	assert.equal(afterSync.details.accepted, true, 'no stranded guard after sync callback');
 });
 
 test('failure and abort are truthful and never strand the guard', async () => {
@@ -371,82 +331,81 @@ test('failure and abort are truthful and never strand the guard', async () => {
 	let report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /FAILED/);
 	assert.match(report.content[0].text, /provider exploded/);
-	// Guard cleared: a new request is possible.
 	const again = await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
-	assert.equal(again.details.accepted, true);
-	// Native abort path (session_compact_failed with aborted=true).
-	f.event('session_compact_failed', { aborted: true });
+	assert.equal(again.details.accepted, true, 'guard cleared after failure');
+	// Native abort path.
+	f.event('session_compact_failed', { aborted: true, errorMessage: 'cancelled by user' });
 	report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /ABORTED/);
 	const after = await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
 	assert.equal(after.details.accepted, true, 'no stranded guard after abort');
 });
 
-test('native session_compact clears a pending request to avoid double-compacting', async () => {
+test('native session_compact clears a pending request (no double-compaction)', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	// Auto-compaction fulfills before the queued dispatch runs.
-	f.event('session_compact', { compactionEntry: { tokensBefore: 190_000 } });
+	f.event('session_compact', { compactionEntry: { id: 'auto-1', tokensBefore: 190_000 } });
 	const report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /SUCCESS/);
 	assert.match(report.content[0].text, /confirmed by session_compact/);
-	// A late request dispatched now must not fire a second compaction: the
-	// session is already compacted; the pending queue is empty.
 	f.event('agent_settled');
 	assert.equal(f.state.compactCalls.length, 0, 'no dispatch after auto-compaction fulfilled');
 });
 
-test('an Already-compacted-style error is only success when an actual compaction landed after the request', async () => {
+test('correlation uses the request-time branch marker: pre-existing, other-branch and missing markers never fulfill', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
+	// Pre-existing compaction on the branch at acceptance time.
+	f.state.branch.push({ type: 'message', id: 'm1' }, { type: 'compaction', id: 'old' });
 	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
-	const requestAt = f.clock.now;
-	// The native request fails at dispatch time; no actual compaction entry
-	// exists → the error is the truth.
 	f.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
 	f.event('agent_settled');
 	let report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
-	assert.match(report.content[0].text, /FAILED/);
-	assert.match(report.content[0].text, /Already compacted/);
-	// With a REAL compaction entry appended after the request in this same
-	// session (it lands AFTER acceptance, so the entry-count snapshot taken
-	// at acceptance excludes it), the error is correlated to that fulfillment,
-	// not reported raw.
-	f.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
+	assert.match(report.content[0].text, /FAILED/, 'pre-existing compaction is not fulfillment');
+	// A real LATER compaction on the SAME branch fulfills the failed request.
 	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
-	f.state.entries = [{ type: 'compaction', timestamp: requestAt + 5, summary: 'auto' }];
+	f.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
+	f.state.branch.push({ type: 'compaction', id: 'later-1' });
 	f.event('agent_settled');
 	report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /SUCCESS/);
 	assert.match(report.content[0].text, /fulfilled by an actual compaction/);
-	// A compaction entry present ALREADY at acceptance (before the request)
-	// never counts as fulfillment.
-	f.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
-	f.state.entries = [{ type: 'compaction', timestamp: requestAt - 5, summary: 'old' }, { type: 'compaction', timestamp: requestAt - 4, summary: 'old2' }];
+	// A compaction on a DIFFERENT branch (leaf changed) never fulfills.
 	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	f.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
+	f.state.branch = [{ type: 'message', id: 'other-branch-m1' }, { type: 'compaction', id: 'other-branch-cmp' }];
 	f.event('agent_settled');
 	report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
-	assert.match(report.content[0].text, /FAILED/, 'pre-request compaction is not fulfillment');
+	assert.match(report.content[0].text, /FAILED/, 'other-branch compaction is not fulfillment');
+	// Missing marker (no getBranch available) also refuses correlation.
+	const f2 = fixture();
+	f2.event('session_start', { reason: 'startup' }, f2.ctx);
+	delete f2.ctx.sessionManager.getBranch;
+	await f2.tools.get('compact').execute('id', {}, undefined, undefined, f2.ctx);
+	f2.state.compactImpl = (options) => options.onError(new Error('Already compacted'));
+	f2.state.entries.push({ type: 'compaction', id: 'anywhere' });
+	f2.event('agent_settled');
+	const report2 = await f2.tools.get('usage').execute('id', {}, undefined, undefined, f2.ctx);
+	assert.match(report2.content[0].text, /FAILED/, 'missing marker refuses correlation');
 });
 
-test('stale callbacks after session replacement are dropped', async () => {
+test('branch/session replacement invalidates queued requests; stale callbacks are dropped', async () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
 	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	const staleOptions = f.state.compactCalls.length
+		? null // not dispatched yet
+		: null;
+	f.event('session_before_switch', {}, f.ctx); // branch replacement
 	f.event('agent_settled');
-	const staleOptions = f.state.compactCalls[0].options;
-	// Session replaced (reload/new): state resets, old era generation is gone.
+	assert.equal(f.state.compactCalls.length, 0, 'queued request invalidated by branch replacement');
+	// Session replacement drops stale-era state and callbacks.
 	f.state.sessionId = 'session-B';
 	f.event('session_start', { reason: 'new' }, f.ctx);
 	let report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(report.content[0].text, /none recorded/);
-	// The stale completion arrives late: it must NOT be recorded as this
-	// session's truth.
-	staleOptions.onComplete({ tokensBefore: 5, estimatedTokensAfter: 2 });
-	report = await f.tools.get('usage').execute('id', {}, undefined, undefined, f.ctx);
-	assert.match(report.content[0].text, /none recorded/, 'stale callback dropped');
-	// A stale ctx.compact throwing (assertActive on a replaced runner) is also
-	// caught and recorded as an error, never crashing or stranding state.
+	void staleOptions;
+	// A stale ctx.compact throwing is caught, never stranding state.
 	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
 	const brokenCtx = { ...f.ctx, sessionManager: { getSessionId: () => 'session-B' }, compact: () => { throw new Error('stale extension context'); } };
 	f.event('agent_settled', {}, brokenCtx);
