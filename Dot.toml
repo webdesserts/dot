@@ -40,6 +40,7 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.pi/agent/extensions/context-controls.ts" = "pi/extensions/context-controls.ts"
 "~/.pi/agent/extensions/notifications.ts" = "pi/extensions/notifications.ts"
 "~/.pi/agent/extensions/notifications.worker.mjs" = "pi/extensions/notifications.worker.mjs"
+"~/.pi/agent/extensions/notifications.sse.protocol.mjs" = "pi/extensions/notifications.sse.protocol.mjs"
 "~/.pi/agent/hindsight.json" = "pi/hindsight.json"
 "~/.pi/agent/settings.json" = "pi/settings.json"
 "~/.pi/agent/themes" = "pi/themes"

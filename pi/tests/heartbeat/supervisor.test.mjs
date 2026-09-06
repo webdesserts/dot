@@ -169,9 +169,9 @@ test('enable switches to goal, persists the transition and sends one fenced enab
 	assert.equal(res.details.state.idleDelayMs, 5000);
 	assert.equal(res.details.state.generation, 1);
 	const lines = f.stdinLines();
-	assert.deepEqual(lines.map(l => l.event), ['init', 'enable'], 'enable sends a single fenced event');
-	assert.equal(lines[1].goal, 'finish the acceptance report');
-	assert.equal(lines[1].busy, false, 'idle session: the worker may arm without a further turn');
+	assert.deepEqual(lines.map(l => l.event), ['init', 'session', 'reconcile', 'enable'], 'enable sends a single fenced enable (plus the SSE-mode session/reconcile binding)');
+	assert.equal(lines[3].goal, 'finish the acceptance report');
+	assert.equal(lines[3].busy, false, 'idle session: the worker may arm without a further turn');
 	// One fresh-ambient baseline at session_start + the enable transition.
 	assert.deepEqual(f.appended.map(a => a.customType), ['heartbeat-control', 'heartbeat-control']);
 	assert.equal(f.appended[0].data.mode, 'ambient', 'fresh baseline persisted at start');
@@ -187,7 +187,7 @@ test('enable without a meaningful goal pointer is rejected and changes nothing',
 		assert.equal(res.details.ok, false, `empty pointer ${JSON.stringify(bad)} rejected`);
 		assert.match(res.details.error, /non-empty nextAction/);
 	}
-	assert.equal(f.stdinLines().length, 1, 'only init was sent — no enable event');
+	assert.equal(f.stdinLines().length, 3, 'only init/session/reconcile were sent — no enable event');
 	assert.deepEqual(f.appended.map(a => a.data.mode), ['ambient'], 'only the startup baseline is persisted');
 	const status = await f.tool.def.execute('id', { action: 'status' });
 	assert.equal(status.details.state.mode, 'ambient', 'state untouched');
@@ -208,7 +208,7 @@ test('the retired wake-budget concept fails explicitly, never silently unlimited
 	const res = await enable(f, { wakeBudget: 5 });
 	assert.equal(res.details.ok, false, 'an old finite-budget request is rejected outright');
 	assert.match(res.details.error, /wakeBudget is retired/);
-	assert.equal(f.stdinLines().length, 1, 'no enable event reached the worker');
+	assert.equal(f.stdinLines().length, 3, 'no enable event reached the worker');
 	assert.deepEqual(f.appended.map(a => a.data.mode), ['ambient'], 'only the startup baseline is persisted');
 	const status = await f.tool.def.execute('id', { action: 'status' });
 	assert.equal('remainingWakes' in status.details.state, false);

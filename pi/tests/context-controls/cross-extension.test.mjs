@@ -70,7 +70,7 @@ async function makeCrossSession(t, { faux, onBeforeCompact, releaseCompaction, c
 	const fixture = { ownedAgentDir, ownedCwd, releaseCompaction, closeServer, session: null };
 	t.after(() => teardownCrossSession(fixture));
 	delete process.env.PI_SUBAGENT_CHILD;
-	for (const file of ["notifications.ts", "notifications.worker.mjs", "context-controls.ts"]) {
+	for (const file of ["notifications.ts", "notifications.worker.mjs", "notifications.sse.protocol.mjs", "context-controls.ts"]) {
 		await copyFile(new URL(`../../extensions/${file}`, import.meta.url), join(ownedAgentDir, file));
 	}
 

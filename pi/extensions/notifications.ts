@@ -154,6 +154,54 @@ export default function (pi) {
 		}
 	};
 
+	// ── SSE presentation delivery (opt-in worker mode; see worker header) ──
+	// Transient ONE-OUTSTANDING guard in supervisor memory ONLY — not a
+	// second durable suppression policy. A presentation id stays in-flight
+	// from its deliver request until the worker reports the ack outcome;
+	// SSE-mode reconnect replays of the same outstanding offer are then
+	// suppressed for THIS instance while un-acked, and everything is
+	// forgotten on process replacement.
+	const sseInFlight = new Map();
+	const SSE_IN_FLIGHT_CAP = 16;
+
+	const isSafePresentationId = (value) =>
+		typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+	// Deliver the EXACT server body as a custom message with display:true,
+	// normally steer + triggerTurn:true (the SDK queues it while busy —
+	// ordinary notification delivery is never gated on isIdle; that
+	// belongs to heartbeat delivery). The send return is NEVER receipt
+	// evidence: only qualifying disk-recorded bytes authorize the ack.
+	const deliverPresentation = (message, presentationId) => {
+		if (!running) return;
+		if (!message || typeof message !== "object") return;
+		if (typeof message.customType !== "string" || typeof message.content !== "string") return;
+		if (message.display !== true || !message.details || typeof message.details !== "object") return;
+		if (!isSafePresentationId(presentationId)) return;
+		if (sseInFlight.has(presentationId)) return; // transient one-outstanding guard
+		if (sseInFlight.size >= SSE_IN_FLIGHT_CAP) {
+			console.error("[notifications] SSE in-flight guard saturated — refusing delivery (static class)");
+			return;
+		}
+		const sessionId = sessionOwner();
+		if (!sessionId) {
+			// Without the current session id the disk receipt could never
+			// qualify; refuse rather than deliver an unacknowledgeable body.
+			console.error("[notifications] SSE delivery refused: no current session id (static class)");
+			return;
+		}
+		sseInFlight.set(presentationId, Date.now());
+		try {
+			pi.sendMessage(
+				{ ...message, details: { ...message.details, sessionId } },
+				{ deliverAs: "steer", triggerTurn: true },
+			);
+		} catch {
+			sseInFlight.delete(presentationId);
+			console.error("[notifications] SSE delivery failed (static class)");
+		}
+	};
+
 	const sendToWorker = (event) => {
 		if (child?.stdin?.writable) child.stdin.write(`${JSON.stringify(event)}\n`);
 	};
@@ -377,6 +425,15 @@ export default function (pi) {
 		// generation) and the current busy/idle snapshot so the fresh worker
 		// matches reality — and arms itself when the parent was idle.
 		sendToWorker(workerInit());
+		// SSE mode (harmless in legacy mode): bind the worker's receipt
+		// reconciliation to THIS session and request startup reconciliation
+		// against the bound session.
+		sendToWorker({
+			event: "session",
+			sessionId: sessionOwner(),
+			sessionFile: currentCtx?.sessionManager?.getSessionFile?.() ?? null,
+		});
+		sendToWorker({ event: "reconcile" });
 		let stdoutBuf = "";
 		spawned.stdout.on("data", (chunk) => {
 			if (child !== spawned || !running) return;
@@ -392,6 +449,28 @@ export default function (pi) {
 						send(parsed.message);
 					} else if (parsed.kind === "heartbeat" && typeof parsed.message === "string") {
 						deliverHeartbeat(parsed.message, parsed.generation);
+					} else if (parsed.kind === "deliver") {
+						// The worker's generic emitter nests every payload under
+						// `message`: the presentation id lives at
+						// parsed.message.details.presentationId (validated for safety
+						// inside deliverPresentation).
+						const deliverMessage =
+							parsed.message && typeof parsed.message === "object" ? parsed.message : null;
+						const deliverId = deliverMessage?.details?.presentationId;
+						deliverPresentation(deliverMessage, isSafePresentationId(deliverId) ? deliverId : null);
+					} else if (parsed.kind === "ack") {
+						// Same nested envelope: {kind:"ack", message:{presentationId,
+						// outcome}}. Only a validated outcome releases the guard.
+						const ackPayload =
+							parsed.message && typeof parsed.message === "object" ? parsed.message : null;
+						const ackId = ackPayload?.presentationId;
+						if (
+							isSafePresentationId(ackId) &&
+							(ackPayload.outcome === "acknowledged" ||
+								ackPayload.outcome === "already_acknowledged")
+						) {
+							sseInFlight.delete(ackId);
+						}
 					}
 				} catch {
 					send(line);
@@ -478,6 +557,7 @@ export default function (pi) {
 		const stopped = child;
 		child = null;
 		stopped?.kill();
+		sseInFlight.clear();
 		// In-memory control state ends with this instance; durable intent was
 		// persisted as custom entries and is restored by the next instance.
 		mode = "ambient";
@@ -496,6 +576,12 @@ export default function (pi) {
 	};
 	pi.on("agent_start", forward("agent_start"));
 	pi.on("agent_end", forward("agent_end"));
+	// Hook-driven receipt reconciliation (the second supported lifecycle
+	// hook alongside session_start): the worker reads qualifying disk
+	// receipts against the bound session and acks them.
+	pi.on("agent_settled", () => {
+		sendToWorker({ event: "reconcile" });
+	});
 
 	// ── model-callable control tool ──
 	pi.registerTool({

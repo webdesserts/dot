@@ -94,6 +94,31 @@
  */
 
 import { stdin, stdout } from "node:process";
+import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import {
+	ACK_PATH,
+	CUSTOM_TYPE,
+	GateError,
+	LEASE_CLAIM_PATH,
+	LEASE_RENEW_PATH,
+	LEASE_STATUS_PATH,
+	METADATA_SCHEMA_VERSION,
+	SUPPORTED_RENDER_VERSION,
+	SseFrameError,
+	STREAM_PATH,
+	WHOAMI_PATH,
+	createSseParser,
+	parseTrustedOrigin,
+	readQualifyingReceipts,
+	validateAckResponse,
+	validateClaimResponse,
+	validatePresentationOffer,
+	validateRenewResponse,
+	validateStatusResponse,
+	validateWhoami,
+	verifyOfferDigest,
+} from "./notifications.sse.protocol.mjs";
 
 const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
 const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
@@ -105,10 +130,17 @@ const POLL_INTERVAL_MS = Number(process.env.AUTONOMY_POLL_INTERVAL_MS ?? 1_000);
 const HEARTBEAT_MS = Number(process.env.AUTONOMY_HEARTBEAT_MS ?? 1_800_000);
 // Mirror of the supervisor's clamp: Node clamps setTimeout above 2^31-1ms
 // to 1ms, so anything larger is rejected rather than mis-scheduled.
-const MAX_IDLE_DELAY_MS = 3_600_000;
-// Fixed ambient window used only when the supervisor has not sent one yet
+const MAX_IDLE_DELAY_MS = 3_600_000;// Fixed ambient window used only when the supervisor has not sent one yet
 // (e.g. a standalone worker that never receives init). Bounded either way.
 const AMBIENT_LIFETIME_MS = 2 * 3_600_000;
+
+// ── SSE-mode module state (referenced by the stdin handler above) ──
+// Supervisor-supplied session identity for receipt reconciliation, and
+// the reconcile queue hook — both no-ops in legacy mode, assigned by the
+// SSE section below when that mode is active.
+let sseSessionId = null;
+let sseSessionFile = null;
+let queueReconcile = () => {};
 
 const emit = (kind, message) => {
 	stdout.write(`${JSON.stringify({ kind, message })}\n`);
@@ -327,6 +359,15 @@ stdin.on("data", (chunk) => {
 				mode = "paused";
 				if (gen !== null) generation = gen;
 				clearIdleTimer();
+			} else if (parsed.event === "session") {
+				// Supervisor-supplied session identity, used ONLY to bind disk-receipt
+				// reconciliation to the exact session that received deliveries.
+				sseSessionId = typeof parsed.sessionId === "string" && parsed.sessionId ? parsed.sessionId : null;
+				sseSessionFile = typeof parsed.sessionFile === "string" && parsed.sessionFile ? parsed.sessionFile : null;
+			} else if (parsed.event === "reconcile") {
+				// Hook/startup-driven receipt reconciliation (session_start,
+				// agent_settled). Serialized so two reconciles never double-ack.
+				queueReconcile();
 			}
 		} catch {
 			// ignore malformed supervisor lines
@@ -414,4 +455,630 @@ const poll = async () => {
 	}
 };
 
-poll();
+// ═════════════════════════════════════════════════════════════════
+// ── opt-in SSE presentation mode (autonomy/t:276 initial guest slice) ──
+// ═════════════════════════════════════════════════════════════════
+//
+// Disabled by default. With AUTONOMY_SSE_MODE=1 the worker consumes
+// POST /notifications/presentation/stream (fetch streaming — NEVER
+// EventSource, no readiness-only redesign, no prepare polling pump)
+// instead of the legacy long-poll. There is NO fallback to legacy
+// consumption: missing config, auth refusal or transport failure is a
+// visible static-class prerequisite failure, and the goal-heartbeat
+// machinery above keeps working unchanged. Everything HTTP/lease/
+// reconnect lives HERE, in the worker, independently of model busy time.
+//
+// Explicit operator configuration (all required — no defaults are
+// invented, and SSE mode never defaults the recipient to Iris):
+//   AUTONOMY_SSE_MODE                  "1" to opt in
+//   AUTONOMY_BASE                      trusted base origin (http(s), no
+//                                      path, no embedded credentials)
+//   AUTONOMY_ACTOR                     recipient actor handle (identity header)
+//   AUTONOMY_SSE_EXPECTED_ACTOR_ID     registry actor uuid that /whoami's
+//                                      actor_id MUST equal (null or
+//                                      mismatched is a visible
+//                                      prerequisite failure)
+//   AUTONOMY_SSE_SCOPE                 backend/store scope for receipt
+//                                      metadata (never derived from cwd)
+//   AUTONOMY_SSE_RENEW_INTERVAL_MS     lease renewal interval (explicit;
+//                                      not copied fixture policy)
+//   AUTONOMY_TOKEN                     optional bearer token, OR
+//   AUTONOMY_SESSION_COOKIE_FILE       path to a private session-cookie file
+//   AUTONOMY_SSE_RECONNECT_BACKOFF_MS  optional reconnect backoff base
+//                                      (default 5000, clamped 50..60000)
+// Credentials stay in process memory: never in URLs, argv or logs.
+// Grant/recovery secrets also stay in process memory — after a process
+// replacement the worker visibly waits/reacquires WITHOUT takeover
+// (takeover:false always; a live foreign owner is waited out, never
+// displaced).
+
+const SSE_MAX_CONNECTION_MS = 600_000; // client-side connection lifetime cap (documented bound)
+const SSE_MAX_EVENT_BYTES = 1_048_576; // bounded incoming event buffer
+const SSE_MAX_LINE_BYTES = 131_072; // bounded framing line
+const SSE_UNCERTAIN_RETRIES = 3; // identical-request retries for uncertain claim/renew/ack
+const SSE_UNCERTAIN_BACKOFF_MS = 300; // base wait between uncertain retries (documented bound)
+const SSE_OWNERSHIP_ATTEMPTS = 6; // bounded status/claim attempts per acquisition pass
+
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+/**
+ * Load and validate the SSE configuration. Returns null when the mode is
+ * not opted into (legacy long-poll remains the default), a config object
+ * when everything required is present, or {invalid: [static reasons]}
+ * when opted in but incomplete — which is a VISIBLE prerequisite failure,
+ * never a silent fallback to legacy consumption.
+ */
+const loadSseConfig = (env) => {
+	if (env.AUTONOMY_SSE_MODE !== "1") return null;
+	const reasons = [];
+	let origin = null;
+	try {
+		origin = parseTrustedOrigin(env.AUTONOMY_BASE ?? "");
+	} catch (err) {
+		reasons.push(err instanceof ConfigError ? err.message : "trusted base origin invalid");
+	}
+	const actor = typeof env.AUTONOMY_ACTOR === "string" ? env.AUTONOMY_ACTOR.trim() : "";
+	if (!actor) reasons.push("the recipient actor must be explicitly configured");
+	const expectedActorId =
+		typeof env.AUTONOMY_SSE_EXPECTED_ACTOR_ID === "string"
+			? env.AUTONOMY_SSE_EXPECTED_ACTOR_ID.trim()
+			: "";
+	if (!expectedActorId) reasons.push("the expected registry actor id must be explicitly configured");
+	const scope = typeof env.AUTONOMY_SSE_SCOPE === "string" ? env.AUTONOMY_SSE_SCOPE.trim() : "";
+	if (!scope) reasons.push("the backend scope must be explicitly configured");
+	const renewMs = Number(env.AUTONOMY_SSE_RENEW_INTERVAL_MS ?? Number.NaN);
+	if (!Number.isSafeInteger(renewMs) || renewMs <= 0 || renewMs > 2 ** 31 - 1) {
+		reasons.push("the lease renewal interval must be explicitly configured as a positive integer ms");
+	}
+	const token = typeof env.AUTONOMY_TOKEN === "string" ? env.AUTONOMY_TOKEN : "";
+	const cookieFilePath =
+		typeof env.AUTONOMY_SESSION_COOKIE_FILE === "string" ? env.AUTONOMY_SESSION_COOKIE_FILE : "";
+	let cookie = "";
+	if (cookieFilePath) {
+		try {
+			// Read ONCE into process memory; never logged, never sent anywhere
+			// but the configured origin's Cookie header.
+			cookie = readFileSync(cookieFilePath, "utf8").trim();
+		} catch {
+			reasons.push("the configured session-cookie file is unreadable");
+		}
+	} else if (!token) {
+		reasons.push("explicit credentials are required (bearer token or session-cookie file)");
+	}
+	if (reasons.length > 0) return { invalid: reasons };
+	return { origin, actor, expectedActorId, scope, renewMs, token, cookie };
+};
+
+/**
+ * The SSE main loop. Identity prerequisite → bounded ownership
+ * acquisition → one bounded stream connection; any refusal/EOF is a
+ * static-class visible failure with bounded reconnect backoff under
+ * VALID ownership — never legacy fallback, never takeover.
+ */
+const sseMain = async (config) => {
+	let lease = null; // {runtimeId, epoch, grantSecret, sequence} — process memory only
+	let renewalTimer = null;
+	let lastFailureClass = null;
+	let consecutiveFailures = 0;
+	const reconnectBackoff = clampNumber(
+		Number(process.env.AUTONOMY_SSE_RECONNECT_BACKOFF_MS ?? 5_000) || 5_000,
+		50,
+		60_000,
+	);
+
+	const stopRenewal = () => {
+		if (renewalTimer) {
+			clearTimeout(renewalTimer);
+			renewalTimer = null;
+		}
+	};
+
+	// The ONE active stream controller, aborted promptly whenever ownership
+	// is dropped so a connection never keeps reading under a dead proof.
+	let streamController = null;
+
+	const dropLease = () => {
+		// Stop using ownership IMMEDIATELY: no further proof use, no
+		// sequence advancement, renewal stopped — and the active stream is
+		// aborted so it cannot keep consuming under the dead proof.
+		lease = null;
+		stopRenewal();
+		if (streamController) {
+			streamController.ownershipDropped = true;
+			streamController.abort();
+		}
+	};
+
+	const scheduleRenewal = () => {
+		stopRenewal();
+		if (!lease) return;
+		// SERIALIZED renewal: the next timer is armed only AFTER the current
+		// renewal completes, so two renewals can never overlap or double-
+		// handle the same next sequence.
+		renewalTimer = setTimeout(async () => {
+			renewalTimer = null;
+			try {
+				await renewLease();
+			} catch {
+				// renewLease handles its own failures (including dropping the
+				// lease); an unexpected throw must not break the chain.
+			}
+			scheduleRenewal();
+		}, config.renewMs);
+		renewalTimer.unref?.();
+	};
+
+	const identityHeaders = () => {
+		const headers = { "X-Auth-User": config.actor, "content-type": "application/json" };
+		if (config.token) headers.Authorization = `Bearer ${config.token}`;
+		if (config.cookie) headers.Cookie = config.cookie;
+		return headers;
+	};
+
+	/**
+	 * One gated POST: bounded timeout, redirect REFUSED (credentials never
+	 * travel elsewhere), JSON.parse, then the exact DTO gate BEFORE any
+	 * effect. 4xx/5xx throw a static class carrying the public status only —
+	 * the raw body is never echoed or stored.
+	 */
+	const gatedPost = async (urlPath, body, validate) => {
+		let response;
+		try {
+			response = await fetch(`${config.origin}${urlPath}`, {
+				method: "POST",
+				headers: identityHeaders(),
+				body: JSON.stringify(body),
+				redirect: "error",
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			});
+		} catch (err) {
+			const uncertain = new Error(`transport uncertainty on ${urlPath}`);
+			uncertain.uncertain = true;
+			throw uncertain;
+		}
+		if (!response.ok) {
+			const refused = new Error(`HTTP ${response.status} refused on ${urlPath} (static class)`);
+			refused.httpStatus = response.status;
+			throw refused;
+		}
+		let parsed;
+		try {
+			parsed = await response.json();
+		} catch {
+			throw new GateError(urlPath, "$", "response was not parseable JSON", "non-JSON");
+		}
+		return validate(parsed);
+	};
+
+	/**
+	 * GET /whoami actor_id MUST equal the configured expected actor.
+	 * A null or mismatched id is a visible prerequisite failure — never an
+	 * invitation to infer or mint an actor.
+	 */
+	const verifyIdentity = async () => {
+		let response;
+		try {
+			response = await fetch(`${config.origin}${WHOAMI_PATH}`, {
+				headers: identityHeaders(),
+				redirect: "error",
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			});
+		} catch {
+			const uncertain = new Error("transport uncertainty on the identity prerequisite");
+			uncertain.uncertain = true;
+			throw uncertain;
+		}
+		if (!response.ok) {
+			const refused = new Error(`identity prerequisite refused (HTTP ${response.status}, static class)`);
+			refused.httpStatus = response.status;
+			throw refused;
+		}
+		const whoami = validateWhoami(await response.json());
+		if (whoami.actor_id === null || whoami.actor_id !== config.expectedActorId) {
+			const failure = new Error(
+				"identity prerequisite FAILED: the resolved actor_id is null or does not match the " +
+					"configured expected actor — refusing to infer or mint an identity",
+			);
+			failure.identityMismatch = true;
+			throw failure;
+		}
+	};
+
+	/**
+	 * Bounded ownership acquisition: status → eligible CAS claim
+	 * (takeover:false, expected_epoch observed). A live conflict WAITS and
+	 * rechecks — NEVER takeover. An uncertain claim response retries the
+	 * PRESERVED IDENTICAL request DIRECTLY, without an intervening status
+	 * check: a status poll after a lost claim response may now show OUR OWN
+	 * just-created owner, and waiting on it would block recovery of our own
+	 * grant forever (the identical retry is what lets the server answer
+	 * `recovered` with the same grant for the same recovery secret).
+	 */
+	const ensureOwnership = async () => {
+		if (lease) return lease;
+		let pendingClaimRequest = null;
+		for (let attempt = 1; attempt <= SSE_OWNERSHIP_ATTEMPTS; attempt++) {
+			if (pendingClaimRequest) {
+				// Lost response recovery: retry the IDENTICAL claim request —
+				// never a status recheck in between.
+				try {
+					const grant = await gatedPost(LEASE_CLAIM_PATH, pendingClaimRequest, (parsed) =>
+						validateClaimResponse(parsed, pendingClaimRequest.runtime_id),
+					);
+					const recovered = pendingClaimRequest;
+					pendingClaimRequest = null;
+					lease = {
+						runtimeId: grant.runtime_id,
+						epoch: grant.epoch,
+						grantSecret: grant.grant_secret,
+						sequence: 0,
+					};
+					scheduleRenewal();
+					return lease;
+				} catch (err) {
+					if (err instanceof GateError) {
+						// No authority use from unsafe data.
+						pendingClaimRequest = null;
+						throw err;
+					}
+					if (err.uncertain) continue; // STILL uncertain: same identical retry
+					pendingClaimRequest = null;
+					// A definitive refusal (409/4xx) ends the recovery attempt;
+					// fall through to a fresh status check on the next iteration.
+					if (attempt >= SSE_OWNERSHIP_ATTEMPTS) throw err;
+					continue;
+				}
+			}
+			const status = await gatedPost(LEASE_STATUS_PATH, {}, validateStatusResponse);
+			if (status.owner) {
+				// Another live runtime owns the lease: wait it out, never take
+				// over. (Our own just-created owner can only appear here when no
+				// claim attempt is pending — recovery above handles that case.)
+				await sleep(reconnectBackoff);
+				continue;
+			}
+			pendingClaimRequest = {
+				runtime_id: `notifications-pi-${crypto.randomUUID()}`,
+				recovery_secret: crypto.randomBytes(32).toString("hex"),
+				expected_epoch: status.epoch,
+				takeover: false,
+			};
+			try {
+				const grant = await gatedPost(LEASE_CLAIM_PATH, pendingClaimRequest, (parsed) =>
+					validateClaimResponse(parsed, pendingClaimRequest.runtime_id),
+				);
+				pendingClaimRequest = null;
+				lease = {
+					runtimeId: grant.runtime_id,
+					epoch: grant.epoch,
+					grantSecret: grant.grant_secret,
+					sequence: 0,
+				};
+				scheduleRenewal();
+				return lease;
+			} catch (err) {
+				if (err instanceof GateError) {
+					// No authority use from unsafe data.
+					pendingClaimRequest = null;
+					throw err;
+				}
+				if (err.httpStatus === 409) {
+					// Stale epoch / live conflict: the preserved request is stale.
+					pendingClaimRequest = null;
+					continue;
+				}
+				if (err.uncertain) continue; // preserved request retries identically above
+				pendingClaimRequest = null;
+				throw err;
+			}
+		}
+		pendingClaimRequest = null;
+		throw new Error("ownership acquisition attempts exhausted (static class)");
+	};
+
+	/**
+	 * Renewal: EXACT next sequence; an uncertain response retries the SAME
+	 * sequence; the sequence advances ONLY on validated success. Lost or
+	 * unconfirmable ownership (410/404/409, gate refusal, exhausted
+	 * uncertainty) stops all further use of the proof and returns to honest
+	 * re-acquisition — never takeover.
+	 */
+	const renewLease = async () => {
+		const current = lease;
+		if (!current) return;
+		const next = current.sequence + 1;
+		if (!Number.isSafeInteger(next) || next < 0) {
+			// Fail honestly: silently expiring ownership beats a wrapped sequence.
+			dropLease();
+			return;
+		}
+		const body = {
+			runtime_id: current.runtimeId,
+			epoch: current.epoch,
+			grant_secret: current.grantSecret,
+			sequence: next,
+		};
+		for (let attempt = 1; attempt <= SSE_UNCERTAIN_RETRIES; attempt++) {
+			try {
+				await gatedPost(LEASE_RENEW_PATH, body, validateRenewResponse);
+				if (lease === current) current.sequence = next; // validated success only
+				return;
+			} catch (err) {
+				if (err instanceof GateError) {
+					dropLease();
+					return;
+				}
+				if (err.httpStatus === 410 || err.httpStatus === 404 || err.httpStatus === 409) {
+					dropLease();
+					return;
+				}
+				if (err.uncertain && attempt < SSE_UNCERTAIN_RETRIES) {
+					await sleep(SSE_UNCERTAIN_BACKOFF_MS);
+					continue; // SAME sequence on the uncertain retry
+				}
+				// Unconfirmable: stop using the proof and re-acquire honestly.
+				dropLease();
+				return;
+			}
+		}
+	};
+
+	const emitOncePerClass = (failureClass) => {
+		if (failureClass === lastFailureClass) return;
+		lastFailureClass = failureClass;
+		emit("wake", `[notifications.sse] ${failureClass}`);
+	};
+
+	const staticFailureClass = (err) => {
+		if (err?.identityMismatch) return "identity prerequisite failed — SSE consumption stays disabled";
+		if (err instanceof GateError) return `response failed the validation gate (${err.endpoint}) — no effect was taken`;
+		if (err?.uncertain) return "transport uncertainty";
+		if (err?.httpStatus === 401 || err?.httpStatus === 403) return `identity/authorization refused (HTTP ${err.httpStatus})`;
+		if (err?.httpStatus === 404 || err?.httpStatus === 410) return `ownership is gone (HTTP ${err.httpStatus})`;
+		if (err?.httpStatus) return `request refused (HTTP ${err.httpStatus})`;
+		return "stream connection failed";
+	};
+
+	// Serialize receipt reconciliation so two reconciles never double-ack.
+	let ackQueue = Promise.resolve();
+	queueReconcile = () => {
+		ackQueue = ackQueue.then(reconcileNow).catch(() => {});
+	};
+
+	/**
+	 * Acknowledge ONLY qualifying disk-recorded custom-message bytes read
+	 * against the bound session, explicit scope and recipient. Send returns,
+	 * socket delivery and in-memory state never authorize an ack.
+	 */
+	const reconcileNow = async () => {
+		if (!sseSessionFile || !sseSessionId) return;
+		const read = readQualifyingReceipts(
+				sseSessionFile,
+				sseSessionId,
+				config.scope,
+				config.actor,
+				config.expectedActorId,
+			);
+		if (!read.ok) {
+			emitOncePerClass(`disk receipts unreadable (${read.reason}) — nothing acknowledged`);
+			return;
+		}
+		for (const receipt of read.receipts) {
+			if (receipt.refused) {
+				// Unknown/foreign/digest refusals retire nothing and are never
+				// reported as success.
+				emit("ack", { presentationId: receipt.presentationId, outcome: "refused" });
+				continue;
+			}
+			await acknowledgeReceipt(receipt, 1);
+		}
+	};
+
+	const acknowledgeReceipt = async (receipt, attempt) => {
+		try {
+			const response = await gatedPost(
+				ACK_PATH,
+				{ presentation_id: receipt.presentationId, expected_digest: receipt.digest },
+				validateAckResponse,
+			);
+			emit("ack", { presentationId: receipt.presentationId, outcome: response.outcome });
+		} catch (err) {
+			if (err instanceof GateError || err.httpStatus === 403 || err.httpStatus === 404 || err.httpStatus === 409) {
+				emit("ack", { presentationId: receipt.presentationId, outcome: "refused" });
+				return;
+			}
+			// Uncertain: bounded retry of the EXACT qualifying receipt after
+			// re-reading the disk bytes — never a resend of the body.
+			if (err.uncertain && attempt < SSE_UNCERTAIN_RETRIES) {
+				await sleep(SSE_UNCERTAIN_BACKOFF_MS * attempt);
+				const read = readQualifyingReceipts(
+				sseSessionFile,
+				sseSessionId,
+				config.scope,
+				config.actor,
+				config.expectedActorId,
+			);
+				const stillThere =
+					read.ok &&
+					read.receipts.some(
+						(r) => !r.refused && r.presentationId === receipt.presentationId && r.digest === receipt.digest,
+					);
+				if (!stillThere) {
+					emitOncePerClass("ack retry aborted: qualifying disk bytes no longer present");
+					return;
+				}
+				return acknowledgeReceipt(receipt, attempt + 1);
+			}
+			emitOncePerClass(`ack retries exhausted (uncertain) for presentation ${receipt.presentationId}`);
+		}
+	};
+
+	/** One validated presentation event → supervisor delivery request. */
+	const handlePresentationEvent = (data) => {
+		let parsed;
+		try {
+			parsed = JSON.parse(data);
+		} catch {
+			emitOncePerClass("malformed presentation frame refused (non-JSON) — no delivery");
+			return;
+		}
+		let offer;
+		try {
+			// Gate BEFORE any effect: framing/size are already bounded by the
+			// parser; safe integers, typed-optional part refs, body, render
+			// version and digest shape are checked here, then the body hash.
+			offer = validatePresentationOffer(parsed);
+		} catch (err) {
+			emitOncePerClass(
+				`presentation offer refused by the validation gate (${err?.field ?? "unknown field"}) — no delivery`,
+			);
+			return;
+		}
+		if (offer.render_version !== SUPPORTED_RENDER_VERSION) {
+			emitOncePerClass("unsupported render version refused — no delivery");
+			return;
+		}
+		if (!verifyOfferDigest(offer)) {
+			emitOncePerClass("presentation body hash mismatch refused — no delivery");
+			return;
+		}
+		emit("deliver", {
+			customType: CUSTOM_TYPE,
+			// The EXACT server-rendered body — never rerendered, never reconstructed.
+			content: offer.body,
+			display: true,
+			details: {
+				schema: METADATA_SCHEMA_VERSION,
+				scope: config.scope,
+				recipient: config.actor,
+				// The VALIDATED STABLE registry actor id (/whoami actor_id was
+				// checked against the configured expected value), not only the
+				// mutable handle. Receipt qualification binds BOTH.
+				actorId: config.expectedActorId,
+				renderVersion: SUPPORTED_RENDER_VERSION,
+				digest: offer.digest,
+				presentationId: offer.presentation_id,
+				contentOfferId: offer.content_offer_id,
+				summaryOfferId: offer.summary_offer_id,
+			},
+		});
+	};
+
+	/**
+	 * One bounded stream connection under the CURRENT proof. The server
+	 * validates ownership before headers; presentation events carry the full
+	 * offer DTO; stream_error is a static class followed by stream end.
+	 * Last-Event-ID is never sent. Any EOF/refusal simply returns — the main
+	 * loop reconnects under valid ownership with bounded backoff.
+	 */
+	const connectStream = async () => {
+		const current = lease;
+		if (!current) throw new Error("connectStream requires current ownership");
+		const controller = new AbortController();
+		streamController = controller;
+		const lifetime = setTimeout(() => controller.abort(), SSE_MAX_CONNECTION_MS);
+		lifetime.unref?.();
+		let response;
+		try {
+			response = await fetch(`${config.origin}${STREAM_PATH}`, {
+				method: "POST",
+				headers: identityHeaders(),
+				body: JSON.stringify({
+					runtime_id: current.runtimeId,
+					epoch: current.epoch,
+					grant_secret: current.grantSecret,
+				}),
+				redirect: "error",
+				signal: controller.signal,
+			});
+		} catch {
+			clearTimeout(lifetime);
+			const uncertain = new Error("transport uncertainty opening the presentation stream");
+			uncertain.uncertain = true;
+			throw uncertain;
+		}
+		if (!response.ok) {
+			clearTimeout(lifetime);
+			const refused = new Error(`presentation stream refused (HTTP ${response.status}, static class)`);
+			refused.httpStatus = response.status;
+			throw refused;
+		}
+		if (!response.body) {
+			clearTimeout(lifetime);
+			throw new Error("presentation stream returned no body (static class)");
+		}
+		const parser = createSseParser({ maxEventBytes: SSE_MAX_EVENT_BYTES, maxLineBytes: SSE_MAX_LINE_BYTES });
+		const decoder = new TextDecoder();
+		try {
+			for await (const chunk of response.body) {
+				const events = parser.feed(decoder.decode(chunk, { stream: true }));
+				for (const event of events) {
+					if (event.event === "presentation") {
+						handlePresentationEvent(event.data);
+					} else if (event.event === "stream_error") {
+						// Static failure class, stream ends. The reconnect path
+						// re-verifies ownership honestly (status → claim, never
+						// takeover); if the proof is dead it is dropped there.
+						emitOncePerClass("stream_error received — the stream is ending");
+						return;
+					}
+					// Unknown event types are ignored (bounded, no effect).
+				}
+			}
+			const tail = parser.end();
+			if (tail.refused) emitOncePerClass("stream ended mid-frame — the partial event is refused");
+		} catch (err) {
+			if (err instanceof SseFrameError) {
+				emitOncePerClass("oversized SSE frame refused — reconnecting");
+			} else if (controller.ownershipDropped) {
+				// Ownership was dropped while this stream was active: the abort
+				// is LOCAL and deliberate, not transport uncertainty.
+				emitOncePerClass("ownership dropped — the active stream was aborted (static class)");
+			} else {
+				const uncertain = new Error("transport uncertainty reading the presentation stream");
+				uncertain.uncertain = true;
+				throw uncertain;
+			}
+		} finally {
+			if (streamController === controller) streamController = null;
+			clearTimeout(lifetime);
+		}
+	};
+
+	// ── the loop ──
+	while (running) {
+		try {
+			await verifyIdentity();
+			await ensureOwnership();
+			await connectStream();
+			lastFailureClass = null; // recovery clears the quiet-until-changed rule
+			consecutiveFailures = 0;
+			await sleep(reconnectBackoff);
+		} catch (err) {
+			emitOncePerClass(`${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
+			if (err instanceof GateError) dropLease(); // no further authority use from that response
+			if (err?.httpStatus === 404 || err?.httpStatus === 410) dropLease(); // stop using lost ownership
+			// Exponential, capped reconnect backoff: bounded rate, honest
+			// steady-state retry, never legacy consumption.
+			consecutiveFailures = Math.min(consecutiveFailures + 1, 8);
+			await sleep(clampNumber(reconnectBackoff * 2 ** (consecutiveFailures - 1), 50, 60_000));
+		}
+	}
+	stopRenewal();
+};
+
+// ── mode dispatch: legacy long-poll remains the DEFAULT; SSE only when ──
+// explicitly opted in. Invalid SSE configuration is heartbeat-only with a
+// visible prerequisite failure — never silent legacy fallback.
+const sseConfig = loadSseConfig(process.env);
+if (sseConfig && sseConfig.invalid) {
+	emit(
+		"wake",
+		`[notifications.sse] PREREQUISITE FAILURE — SSE mode stays disabled; ${sseConfig.invalid.join("; ")}`,
+	);
+	// Heartbeat machinery above stays armed; no poll loop, no SSE loop.
+} else if (sseConfig) {
+	sseMain(sseConfig);
+} else {
+	poll();
+}
