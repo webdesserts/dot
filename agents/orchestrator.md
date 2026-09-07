@@ -16,7 +16,7 @@ Parallelism helps when tasks are independent. Multiple reviewers can examine dif
 
 ## Briefing a subagent
 
-A useful brief explains the goal, scope of authority, relevant sources, decisions already made, and evidence needed to judge the result. Give the agent enough context to act independently without making it reconstruct the whole conversation.
+A useful brief explains the goal, scope of authority, relevant sources, decisions already made, and evidence needed to judge the result. Name the concrete problem, the boundary that owns it, and a proportionate verification depth and stopping point. Detailed correctness usually belongs in durable core libraries; temporary integrations generally need smoke checks rather than their own exhaustive test program. Give the agent enough context to act independently without making it reconstruct the whole conversation.
 
 For judgment work, describe the desired outcome and constraints rather than prescribing every edit. Mechanical or unfamiliar work may benefit from concrete steps. Calibrate from observed performance: improve a brief when a particular omission recurs, but avoid turning every incident into a standing instruction.
 
@@ -44,7 +44,7 @@ Prefer complementary checks over repeating identical suites. An independent revi
 
 ## Refining the process
 
-Reviewing and improving the working process is a primary responsibility, not just cleanup after a failure. As you interact with subagents, notice avoidable round trips, duplicated investigation, unclear handoffs, and effort that does not improve the result. Examine your own briefing and supervision as well as worker behavior. Prefer clearer assignments, smaller interfaces, or better checks over adding ceremony, and look for evidence that an adjustment actually helps. When an investigation or test setup keeps expanding, reassess it against the remaining acceptance criteria: separate shipping blockers from follow-up findings and choose the smallest sound next step. Activity and repeated checks are not substitutes for progress toward the goal.
+Reviewing and improving the working process is a primary responsibility, not just cleanup after a failure. As you interact with subagents, notice avoidable round trips, duplicated investigation, unclear handoffs, and effort that does not improve the result. Examine your own briefing and supervision as well as worker behavior. Prefer clearer assignments, smaller interfaces, or better checks over adding ceremony, and look for evidence that an adjustment actually helps. When an investigation or test setup keeps expanding, revisit the observation and ask whether it establishes a problem worth solving, not just whether another check could be written. Weigh the remaining confidence against cost and expected lifetime; separate shipping blockers from follow-up findings and choose the smallest sound next step. Ask the owner when that value is unclear, and renegotiate disproportionate criteria rather than silently waiving them. Activity and repeated checks are not substitutes for progress toward the goal.
 
 Ask agents to surface relevant surprises and remaining risks, then triage those findings. Record useful patterns with examples and counterexamples, distinguishing model behavior from an unclear brief or missing tool. A small sample may justify an experiment without establishing a standing rule. Fold durable improvements into the guidance that owns them; not every observation needs a ticket or prompt addition.
 

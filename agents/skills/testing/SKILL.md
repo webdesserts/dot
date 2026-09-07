@@ -15,12 +15,11 @@ All tests should be grounded in **real-world user scenarios and edge cases**, ne
 
 ## Test Hierarchy
 
-**Prefer e2e and integration tests over unit tests.** Unit tests fill gaps for:
+**Test at the smallest reliable boundary that owns the behavior.** Put detailed correctness tests in the owning crate or library: public-API integration tests for its contracts, focused unit tests for local logic and high-input-variation components. Use cross-system tests where the interaction itself is the risk, not to repeat every lower-level case.
 
-- High-input-variation components (parsers, validators)
-- Widely-reused internals where the blast radius of a bug is large
+Match effort to consequence, likelihood, expected lifetime, and maintenance cost. Temporary adapters and personal tooling generally need high-level smoke tests for the intended workflow, visible output, and major failures—not exhaustive validation of the host application's internals. Serious risks such as data loss or unauthorized effects still warrant targeted checks.
 
-When deciding what to test, start from the user's perspective and work inward. If an integration test covers the behavior, a unit test for the same path adds cost without value.
+Before expanding coverage, name the observation, the actual problem for a consumer, and why solving it is worth the cost. A conceivable edge case is not automatically a requirement. If test scaffolding or repeated review cycles cost more than the remaining confidence they provide, report what is verified and propose the smallest next check or a deferral. Ask the owner when the value is unclear; don't silently waive agreed criteria or turn every finding into another test project.
 
 ## Spec Alignment
 
@@ -28,7 +27,7 @@ Always check for BDD specs (`specs/*.feature`) and keep tests in sync with them:
 
 - Before writing tests, read relevant specs to understand expected behavior
 - Call out when tests diverge from specs — this is a signal, not noise
-- When edge cases are discovered during testing, add them as new spec scenarios too
+- Add discovered edge cases to specs when they represent agreed behavior; don't promote every hypothetical case into a requirement
 
 ## Failing Tests Are Signals
 
