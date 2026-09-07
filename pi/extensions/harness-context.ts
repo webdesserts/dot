@@ -1,24 +1,8 @@
 /**
- * harness-context — inject the orchestrator's live context into the system prompt.
- *
- * WHY: opencode dropped re-injected instructions + Working Memory on compaction.
- * pi's system prompt is NOT a session entry — it's re-assembled per turn and sent
- * straight in the payload, so compaction (which only operates on the append-only
- * entry tree) can never touch it. Appending here = structurally compaction-exempt,
- * permanently, with zero config.
- *
- * Files are read FRESH FROM DISK every turn (single source of truth = the dots
- * repo + the notes vault; no duplicated copies to go stale). Working Memory in
- * particular changes constantly mid-session, so re-reading each turn is required.
- *
- * PORTABLE: paths are resolved from os.homedir(), so this works unchanged on any
- * machine in the fleet (umbra=nir, charon/rhea=michael). Device.md is the
- * per-machine seam — each machine supplies its own ~/Device.md.
- *
- * Subagents are spawned with --append-system-prompt (their role prompt); they get
- * live Working Memory only, NOT the full orchestrator doctrine.
+ * Load shared host guidance and the selected agent's current Working Memory.
+ * AUTONOMY_AGENT_ID is an explicit per-process convention, independent of cwd.
+ * Native children use their handoff instead of automatically loading parent memory.
  */
-
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,44 +12,50 @@ const HOME = os.homedir();
 const ORCHESTRATOR = path.join(HOME, ".config/agents/orchestrator.md");
 const NOTETAKING = path.join(HOME, ".config/agents/notetaking.md");
 const DEVICE = path.join(HOME, "Device.md");
-const WORKING_MEMORY = path.join(HOME, "notes/Working Memory.md");
 
-function readSafe(p: string): string {
+function validAgentId(id: unknown): id is string {
+	return typeof id === "string"
+		&& id.length >= 1 && id.length <= 64
+		&& /^[a-z]/.test(id) && !/[^a-z0-9_-]/.test(id);
+}
+
+function readShared(file: string): string {
 	try {
-		return fs.readFileSync(p, "utf-8").trim();
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
-		const message = err instanceof Error ? err.message : String(err);
-		return `> ⚠ HARNESS-CONTEXT: failed to read ${p}: ${message} — content missing this turn, retry or investigate.`;
+		return fs.readFileSync(file, "utf8").trim();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		return `> HARNESS-CONTEXT: shared guidance could not be read: ${file}`;
 	}
 }
 
 export default function harnessContext(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
-		// Heuristic: spawned role subagents carry an appended system prompt.
-		const isSubagent = Boolean(event.systemPromptOptions?.appendSystemPrompt);
+		if (process.env.PI_SUBAGENT_CHILD === "1") return;
 
 		const parts: string[] = [];
-
-		if (!isSubagent) {
-			const orchestrator = readSafe(ORCHESTRATOR);
-			const notetaking = readSafe(NOTETAKING);
-			const device = readSafe(DEVICE);
-			if (orchestrator) parts.push(`# Orchestrator\n\n${orchestrator}`);
-			if (notetaking) parts.push(`# Notetaking\n\n${notetaking}`);
-			if (device) parts.push(`# Device\n\n${device}`);
+		for (const [title, file] of [
+			["Orchestrator", ORCHESTRATOR],
+			["Notetaking", NOTETAKING],
+			["Device", DEVICE],
+		]) {
+			const content = readShared(file);
+			if (content) parts.push(`# ${title}\n\n${content}`);
 		}
 
-		// Working Memory: injected for the orchestrator AND every subagent.
-		const workingMemory = readSafe(WORKING_MEMORY);
-		if (workingMemory) {
-			parts.push(`# Working Memory (live — re-read from disk every turn)\n\n${workingMemory}`);
+		const agentId = process.env.AUTONOMY_AGENT_ID;
+		if (!validAgentId(agentId)) {
+			parts.push("# Agent memory unavailable\n\nSet AUTONOMY_AGENT_ID explicitly: a lowercase ASCII letter followed by letters, digits, hyphens or underscores, at most 64 characters. No private Working Memory was loaded; identity is never inferred from cwd.");
+		} else {
+			parts.push(`# Agent identity\n\nAgent ID: ${agentId}. When calling Remember, supply agent_id: \"${agentId}\". This selects context, not access permissions.`);
+			const file = path.join(HOME, "notes", "agents", agentId, `Working Memory — ${agentId}.md`);
+			try {
+				const content = fs.readFileSync(file, "utf8").trim();
+				parts.push(`# Working Memory — ${agentId} (reread this turn)\n\n${content}`);
+			} catch {
+				parts.push(`# Agent memory unavailable\n\nCould not read ${file}. No other Working Memory was loaded as a fallback.`);
+			}
 		}
 
-		if (parts.length === 0) return;
-
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${parts.join("\n\n---\n\n")}`,
-		};
+		return { systemPrompt: `${event.systemPrompt}\n\n${parts.join("\n\n---\n\n")}` };
 	});
 }
