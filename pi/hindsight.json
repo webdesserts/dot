@@ -16,6 +16,13 @@
   },
   "recall": {
     "topK": 8,
-    "maxTokens": 800
+    "maxTokens": 800,
+    "enabled": false
+  },
+  "mentalModels": {
+    "inject": false
+  },
+  "retain": {
+    "enabled": false
   }
 }

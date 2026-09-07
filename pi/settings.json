@@ -32,7 +32,7 @@
   },
   "packages": [
     "npm:pi-mcp-adapter",
-    "npm:@luxusai/pi-hindsight",
+    {"source": "npm:@luxusai/pi-hindsight", "extensions": [], "skills": []},
     "npm:pi-subagents"
   ],
   "compaction": {
