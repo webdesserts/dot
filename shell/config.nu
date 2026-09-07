@@ -10,6 +10,7 @@ use ~/scripts/prompts.nu
 # work.env value (PI_FOUNDRY_EXTENSION), so it's a plain passthrough off-rhea.
 # (nushell can't conditionally `use`; the wrapper self-gates instead.)
 use ~/scripts/work.nu pi
+use ~/scripts/iris.nu
 
 # change project
 alias jp = cd $"(projects list | fzf | str trim)"
