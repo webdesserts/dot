@@ -2,6 +2,7 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
   "subagents": {
+    "disableBuiltins": true,
     "defaultModel": "fireworks/accounts/fireworks/models/glm-5p3-flash",
     "agentOverrides": {
       "analyst": { "model": "fireworks/accounts/fireworks/models/glm-5p3-flash" },
