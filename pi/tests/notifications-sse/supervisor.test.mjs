@@ -192,7 +192,7 @@ test("heartbeat delivery is untouched by SSE handling (generation fencing still 
 const sha256Hex = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
 
 /**
- * Spawn the actual worker (opt-in SSE mode) against a loopback fake daemon,
+ * Spawn the actual worker (default SSE mode) against a loopback fake daemon,
  * and feed its RAW stdout lines through the supervisor VM's stdout handler —
  * the exact seam the fabricated-peer tests cannot cover. Cleanup is
  * registered IMMEDIATELY after spawn; every wait is hard-bounded so the
@@ -208,7 +208,7 @@ test("integration: real worker stdout through the supervisor handler — exact-b
 				res.writeHead(status, { "content-type": "application/json" });
 				res.end(JSON.stringify(payload));
 			};
-			if (req.url === "/whoami") respond(200, { user: "rhea", actor_id: "uuid-1" });
+			if (req.url === "/whoami") respond(200, { user: "rhea", actor_id: "6f1c2a34-0000-4000-8000-0000000000a1" });
 			else if (req.url === "/notifications/lease/status") respond(200, { epoch: 0, owner: null });
 			else if (req.url === "/notifications/lease/claim") {
 				const body = JSON.parse(raw);
@@ -231,12 +231,15 @@ test("integration: real worker stdout through the supervisor handler — exact-b
 	const child = spawn(process.execPath, [new URL("../../extensions/notifications.worker.mjs", import.meta.url).pathname], {
 		env: {
 			...process.env,
-			AUTONOMY_SSE_MODE: "1",
+			AUTONOMY_SSE_MODE: undefined,
+			AUTONOMY_SESSION_COOKIE_FILE: "",
+			AUTONOMY_SSE_EXPECTED_ACTOR_ID: "",
+			AUTONOMY_SSE_RENEW_INTERVAL_MS: "",
+			// Default-SSE mode with the explicit scope override; identity is
+			// resolved from the fake daemon's /whoami (user "rhea", actor_id
+			// "6f1c2a34-0000-4000-8000-0000000000a1"), matching the qualifying disk fixture below.
 			AUTONOMY_BASE: `http://127.0.0.1:${fake.address().port}`,
-			AUTONOMY_ACTOR: "rhea",
-			AUTONOMY_SSE_EXPECTED_ACTOR_ID: "uuid-1",
 			AUTONOMY_SSE_SCOPE: "scope-1",
-			AUTONOMY_SSE_RENEW_INTERVAL_MS: "60000",
 			AUTONOMY_SSE_RECONNECT_BACKOFF_MS: "30",
 			AUTONOMY_TOKEN: "test-only-token-not-real",
 			AUTONOMY_HEARTBEAT_MS: "0",
@@ -297,7 +300,7 @@ test("integration: real worker stdout through the supervisor handler — exact-b
 		schema: 1,
 		scope: "scope-1",
 		recipient: "rhea",
-		actorId: "uuid-1",
+		actorId: "6f1c2a34-0000-4000-8000-0000000000a1",
 		sessionId: f.SESSION_ID,
 		presentationId: 7,
 		renderVersion: 1,

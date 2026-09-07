@@ -1,6 +1,7 @@
 /**
- * Behavioral tests for the opt-in SSE presentation worker
- * (pi/extensions/notifications.worker.mjs in AUTONOMY_SSE_MODE=1).
+ * Behavioral tests for the default-on SSE presentation worker
+ * (pi/extensions/notifications.worker.mjs; an explicit
+ * AUTONOMY_SSE_MODE=0 opts out into the legacy long-poll).
  *
  * Each test spawns the real worker as a child process pointed at a local
  * fake daemon that speaks the actual t276 wire protocol: GET /whoami,
@@ -29,40 +30,57 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const EXPECTED_ACTOR_ID = "6f1c2a34-0000-4000-8000-000000000001";
 const ACTOR = "rhea";
+// Explicit scope-override fixture (the DEFAULT scope is the trusted origin).
 const SCOPE = "test-backend-scope";
 
 /**
- * The fake daemon. Every request is recorded ({method, url, headers, body}).
+ * The fake daemon. Every request is recorded ({method, url, headers, body, at}).
  * `onStream(req, res, connectionIndex)` lets a test script each SSE
- * connection; by default the connection just stays open.
+ * connection; by default the connection just stays open. `whoami` and
+ * `claimDeadlineMs` let a test script the identity response and the
+ * server's lease budget.
  */
-function makeFakeServer({ onStream } = {}) {
+function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone = false, claimConflictAfter = null } = {}) {
 	const requests = [];
 	let streamConnections = 0;
+	let claims = 0;
 	const acks = [];
 	const server = createServer((req, res) => {
 		let raw = "";
 		req.on("data", (c) => (raw += c));
 		req.on("end", () => {
-			const record = { method: req.method, url: req.url, headers: req.headers, body: raw };
+			const record = { method: req.method, url: req.url, headers: req.headers, body: raw, at: Date.now() };
 			requests.push(record);
 			const respond = (status, payload) => {
 				res.writeHead(status, { "content-type": "application/json" });
 				res.end(JSON.stringify(payload));
 			};
 			if (req.url === "/whoami" && req.method === "GET") {
-				respond(200, { user: ACTOR, actor_id: EXPECTED_ACTOR_ID });
+				respond(200, whoami ?? { user: ACTOR, actor_id: EXPECTED_ACTOR_ID });
 			} else if (req.url === "/notifications/lease/status") {
 				respond(200, { epoch: 0, owner: null });
 			} else if (req.url === "/notifications/lease/claim") {
 				const body = JSON.parse(raw);
+				claims += 1;
+				if (claimConflictAfter !== null && claims > claimConflictAfter) {
+					res.writeHead(409);
+					res.end();
+					return;
+				}
 				respond(200, {
 					outcome: "granted",
 					epoch: 1,
 					runtime_id: body.runtime_id,
 					grant_secret: "ab".repeat(32),
-					deadline_remaining_ms: 30_000,
+					deadline_remaining_ms: claimDeadlineMs,
 				});
+			} else if (req.url === "/notifications/lease/renew") {
+				if (renewGone) {
+					res.writeHead(410);
+					res.end();
+					return;
+				}
+				respond(200, { outcome: "renewed", deadline_remaining_ms: claimDeadlineMs });
 			} else if (req.url === "/notifications/presentation/stream" && req.method === "POST") {
 				streamConnections += 1;
 				res.writeHead(200, { "content-type": "text/event-stream" });
@@ -88,12 +106,14 @@ function startWorker(port, extraEnv = {}) {
 	const child = spawn(process.execPath, [WORKER_PATH], {
 		env: {
 			...process.env,
-			AUTONOMY_SSE_MODE: "1",
+			AUTONOMY_SSE_MODE: undefined,
+			AUTONOMY_SESSION_COOKIE_FILE: "",
+			AUTONOMY_SSE_EXPECTED_ACTOR_ID: "",
+			AUTONOMY_SSE_SCOPE: "",
+			AUTONOMY_SSE_RENEW_INTERVAL_MS: "",
+			// Minimal default-SSE setup: trusted origin + credential only.
+			// Identity (ActorId + handle), scope and renewal derive at runtime.
 			AUTONOMY_BASE: `http://127.0.0.1:${port}`,
-			AUTONOMY_ACTOR: ACTOR,
-			AUTONOMY_SSE_EXPECTED_ACTOR_ID: EXPECTED_ACTOR_ID,
-			AUTONOMY_SSE_SCOPE: SCOPE,
-			AUTONOMY_SSE_RENEW_INTERVAL_MS: "60000",
 			AUTONOMY_SSE_RECONNECT_BACKOFF_MS: "30",
 			AUTONOMY_TOKEN: "test-only-token-not-real",
 			AUTONOMY_HEARTBEAT_MS: "0",
@@ -143,12 +163,12 @@ function startWorker(port, extraEnv = {}) {
 	return { child, lines, stderr, waitFor, send };
 }
 
-const writeSessionFile = (body, presentationId) => {
+const writeSessionFile = (body, presentationId, scope) => {
 	const dir = mkdtempSync(join(tmpdir(), "sse-worker-session-"));
 	const file = join(dir, "session.jsonl");
 	const details = {
 		schema: METADATA_SCHEMA_VERSION,
-		scope: SCOPE,
+		scope,
 		recipient: ACTOR,
 		actorId: EXPECTED_ACTOR_ID,
 		sessionId: "sess-1",
@@ -185,7 +205,7 @@ const OFFER = {
 
 // ── the full stream → custom message → disk receipt → ack path ──────────
 
-test("SSE worker: identity, claim-before-stream, delivery, reconciliation, ack", async (t) => {
+test("SSE worker: minimal config, whoami-derived identity, origin-derived scope, claim-before-stream, delivery, reconciliation, ack", async (t) => {
 	let streamRes = null;
 	const fake = makeFakeServer({
 		onStream: (req, res) => {
@@ -194,6 +214,7 @@ test("SSE worker: identity, claim-before-stream, delivery, reconciliation, ack",
 		},
 	});
 	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
 	const w = startWorker(port);
 	t.after(() => {
 		w.child.kill();
@@ -211,17 +232,29 @@ test("SSE worker: identity, claim-before-stream, delivery, reconciliation, ack",
 	assert.equal(deliver.message.details.presentationId, 7);
 	assert.equal(deliver.message.details.renderVersion, 1);
 	assert.equal(deliver.message.details.digest, sha256Hex(OFFER.body));
-	assert.equal(deliver.message.details.scope, SCOPE);
-	assert.equal(deliver.message.details.recipient, ACTOR);
-	assert.equal(deliver.message.details.actorId, EXPECTED_ACTOR_ID, "the stable actor id is bound");
+	assert.equal(deliver.message.details.scope, origin, "scope defaults to the trusted origin");
+	assert.equal(
+		deliver.message.details.recipient,
+		ACTOR,
+		"the receipt handle is derived from the validated whoami response",
+	);
+	assert.equal(
+		deliver.message.details.actorId,
+		EXPECTED_ACTOR_ID,
+		"the stable actor id is derived from whoami, not separately configured",
+	);
 	assert.equal(deliver.message.details.contentOfferId, null);
 	assert.equal(deliver.message.details.summaryOfferId, null);
 
+	// The FIRST whoami relies on the actual credential only — never a
+	// fabricated actor header; the validated identity is used consistently
+	// afterwards.
 	const whoami = fake.requests.find((r) => r.url === "/whoami");
-	assert.equal(whoami.headers["x-auth-user"], ACTOR);
+	assert.equal(whoami.headers["x-auth-user"], undefined);
 	assert.equal(whoami.headers.authorization, "Bearer test-only-token-not-real");
 	const claimRec = fake.requests.find((r) => r.url === "/notifications/lease/claim");
 	assert.ok(claimRec, "claim must happen before the stream");
+	assert.equal(claimRec.headers["x-auth-user"], ACTOR, "subsequent calls carry the whoami-derived handle");
 	const claimBody = JSON.parse(claimRec.body);
 	assert.equal(claimBody.takeover, false, "never automatic takeover");
 	assert.equal(claimBody.expected_epoch, 0);
@@ -234,7 +267,7 @@ test("SSE worker: identity, claim-before-stream, delivery, reconciliation, ack",
 	assert.ok(!("last-event-id" in streamReq.headers), "Last-Event-ID is never sent");
 
 	// Simulate the supervisor's SDK delivery: qualifying disk bytes exist.
-	const sessionFile = writeSessionFile(OFFER.body, 7);
+	const sessionFile = writeSessionFile(OFFER.body, 7, origin);
 	w.send({ event: "session", sessionId: "sess-1", sessionFile });
 	w.send({ event: "reconcile" });
 
@@ -313,7 +346,8 @@ test("SSE worker: a malformed presentation frame is refused with no delivery and
 
 // ── identity prerequisite gate ───────────────────────────────────────────
 
-test("SSE worker: an actor_id mismatch is a visible prerequisite failure with no claim and no legacy fallback", async (t) => {
+// Optional explicit pin: a mismatch is still a visible prerequisite failure.
+test("SSE worker: an actor_id pin mismatch is a visible prerequisite failure with no claim and no legacy fallback", async (t) => {
 	const fake = makeFakeServer({});
 	const port = await listen(fake.server);
 	const w = startWorker(port, { AUTONOMY_SSE_EXPECTED_ACTOR_ID: "someone-else-entirely" });
@@ -331,12 +365,200 @@ test("SSE worker: an actor_id mismatch is a visible prerequisite failure with no
 	assert.equal(fake.requests.filter((r) => r.url.startsWith("/notifications?timeout")).length, 0);
 });
 
-// ── missing config: visible failure, no legacy fallback, heartbeat armed ──
+// ── missing identity: visible refusal, no claim, no legacy fallback ────
 
-test("SSE worker: missing config is a visible prerequisite failure and never falls back to legacy polling", async (t) => {
+test("SSE worker: a null actor_id is a visible identity refusal with no claim and no legacy fallback", async (t) => {
+	const fake = makeFakeServer({ whoami: { user: null, actor_id: null } });
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	const line = await w.waitFor((l) => l.includes("[notifications.sse]") && l.toLowerCase().includes("identity"), "identity refusal");
+	assert.ok(line, "the missing-identity refusal is visible");
+	await sleep(200);
+	assert.equal(fake.requests.filter((r) => r.url === "/notifications/lease/claim").length, 0);
+	assert.equal(fake.requests.filter((r) => r.url.startsWith("/notifications?timeout")).length, 0);
+});
+
+// ── malformed identity responses refuse at the boundary ─────────────
+
+test("SSE worker: a non-UUID ActorId or whitespace-only handle refuses visibly with no claim", async (t) => {
+	// Static refusals only: the offending identity values are never reflected.
+	for (const badWhoami of [
+		{ user: ACTOR, actor_id: "garbage-not-a-uuid" },
+		{ user: "   ", actor_id: EXPECTED_ACTOR_ID },
+	]) {
+		const fake = makeFakeServer({ whoami: badWhoami });
+		const port = await listen(fake.server);
+		const w = startWorker(port);
+		t.after(() => {
+			w.child.kill();
+			fake.server.close();
+			fake.server.closeAllConnections?.();
+		});
+		const line = await w.waitFor((l) => l.includes("[notifications.sse]") && l.toLowerCase().includes("identity"), "identity refusal");
+		assert.ok(line, "the malformed-identity refusal is visible");
+		await sleep(150);
+		assert.equal(
+			fake.requests.filter((r) => r.url === "/notifications/lease/claim").length,
+			0,
+			"no ownership use from a malformed identity",
+		);
+	}
+});
+
+// ── default SSE vs explicit 0 ─────────────────────────────────────
+
+test("SSE worker: an explicit AUTONOMY_SSE_MODE=0 opts out into the legacy long-poll", async (t) => {
 	const fake = makeFakeServer({});
 	const port = await listen(fake.server);
-	const w = startWorker(port, { AUTONOMY_SSE_EXPECTED_ACTOR_ID: "" });
+	const w = startWorker(port, { AUTONOMY_SSE_MODE: "0", AUTONOMY_ACTOR: "iris" });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	// The legacy loop long-polls immediately; SSE identity/lease machinery
+	// is never engaged.
+	await sleep(300);
+	assert.ok(
+		fake.requests.some((r) => r.url.startsWith("/notifications?timeout=")),
+		"the legacy long-poll is the transport",
+	);
+	assert.equal(fake.requests.filter((r) => r.url === "/whoami").length, 0, "no SSE identity resolution");
+	assert.equal(fake.requests.filter((r) => r.url.endsWith("/presentation/stream")).length, 0, "no SSE stream");
+});
+
+// ── explicit scope override replaces the origin-derived default ──────
+
+test("SSE worker: an explicit scope override replaces the origin-derived default", async (t) => {
+	const fake = makeFakeServer({ onStream: (req, res) => presentationEvent(res, OFFER) });
+	const port = await listen(fake.server);
+	const w = startWorker(port, { AUTONOMY_SSE_SCOPE: SCOPE });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	const deliverLine = await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	assert.equal(JSON.parse(deliverLine).message.details.scope, SCOPE);
+});
+
+// ── renewal derives from the server's remaining lease budget ───────────
+
+const waitForRequest = async (fake, predicate, ms = 5000) => {
+	const start = Date.now();
+	for (;;) {
+		const found = fake.requests.filter(predicate);
+		if (found.length > 0) return found;
+		if (Date.now() - start > ms) {
+			throw new Error(`timed out waiting for requests; saw: ${fake.requests.map((r) => r.url).join(",")}`);
+		}
+		await sleep(25);
+	}
+};
+
+test("SSE worker: renewal defaults from the server budget, stays serialized, never re-claims or overlaps", async (t) => {
+	// Short budget (3s) → derived delay is exactly one third (1s):
+	// conservatively before expiry, never a zero-delay busy loop.
+	const fake = makeFakeServer({ claimDeadlineMs: 3_000 });
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	// Ownership alone is enough: no stream offer is scripted here.
+	const claim = (await waitForRequest(fake, (r) => r.url === "/notifications/lease/claim"))[0];
+	const renews = await waitForRequest(fake, (r) => r.url === "/notifications/lease/renew");
+	assert.equal(JSON.parse(renews[0].body).sequence, 1, "the exact next sequence");
+	assert.ok(renews[0].at - claim.at >= 900, "the derived delay precedes expiry, not immediate");
+
+	// The next renewal re-arms only after the previous one completes, from
+	// the server's fresh budget — and ownership is never re-claimed while
+	// the lease is valid.
+	await waitForRequest(fake, (r) => r.url === "/notifications/lease/renew" && JSON.parse(r.body).sequence === 2, 8000);
+	assert.equal(fake.requests.filter((r) => r.url === "/notifications/lease/claim").length, 1, "no overlapping renewal or re-claim");
+});
+
+test("SSE worker: a subsecond server budget renews strictly before expiry", async (t) => {
+	// 600ms budget → one third = 200ms: before expiry, where the previous
+	// 1s floor would have landed after it.
+	const fake = makeFakeServer({ claimDeadlineMs: 600 });
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	const claim = (await waitForRequest(fake, (r) => r.url === "/notifications/lease/claim"))[0];
+	const renews = await waitForRequest(fake, (r) => r.url === "/notifications/lease/renew");
+	assert.equal(JSON.parse(renews[0].body).sequence, 1, "the exact next sequence");
+	const delay = renews[0].at - claim.at;
+	assert.ok(delay >= 120, `the derived delay is not immediate (${delay}ms)`);
+	assert.ok(delay < 600, `renewal lands before the 600ms expiry (${delay}ms)`);
+});
+
+test("SSE worker: a zero remaining budget schedules one positive renewal, then stops without a busy loop", async (t) => {
+	// 0 remaining → the positive floor delay, then the 410 honestly drops
+	// the lease; re-acquisition is refused (409) so the renewal chain ends.
+	const fake = makeFakeServer({ claimDeadlineMs: 0, renewGone: true, claimConflictAfter: 1 });
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	const claim = (await waitForRequest(fake, (r) => r.url === "/notifications/lease/claim"))[0];
+	const renews = await waitForRequest(fake, (r) => r.url === "/notifications/lease/renew");
+	assert.equal(JSON.parse(renews[0].body).sequence, 1);
+	const delay = renews[0].at - claim.at;
+	assert.ok(delay >= 40, `the renewal delay stays strictly positive (${delay}ms)`);
+	await sleep(700);
+	assert.equal(
+		fake.requests.filter((r) => r.url === "/notifications/lease/renew").length,
+		1,
+		"the lost lease ends the renewal chain — no busy loop",
+	);
+});
+
+test("SSE worker: an explicit positive renewal interval overrides the server-budget derivation", async (t) => {
+	const fake = makeFakeServer({ claimDeadlineMs: 3_000 });
+	const port = await listen(fake.server);
+	const w = startWorker(port, { AUTONOMY_SSE_RENEW_INTERVAL_MS: "60000" });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	// Ownership alone is enough: no stream offer is scripted here.
+	await sleep(1500); // far longer than the derived ~1s delay would take
+	assert.equal(
+		fake.requests.filter((r) => r.url === "/notifications/lease/renew").length,
+		0,
+		"the explicit interval wins over the short server budget",
+	);
+});
+
+// ── missing credentials: visible failure, no legacy fallback, heartbeat armed ──
+
+test("SSE worker: missing credentials is a visible prerequisite failure and never falls back to legacy polling", async (t) => {
+	const fake = makeFakeServer({});
+	const port = await listen(fake.server);
+	const w = startWorker(port, { AUTONOMY_TOKEN: "" });
 	t.after(() => {
 		w.child.kill();
 		fake.server.close();
@@ -344,7 +566,17 @@ test("SSE worker: missing config is a visible prerequisite failure and never fal
 	});
 
 	const line = await w.waitFor((l) => l.includes("PREREQUISITE FAILURE"), "prerequisite failure");
-	assert.match(line, /renewal interval|actor id|scope|origin|credentials/);
+	assert.match(line, /credentials|origin/);
+
+	// The trusted base origin is REQUIRED in SSE mode — no implicit
+	// localhost default that an existing credential would be sent to.
+	const w2 = startWorker(port, { AUTONOMY_BASE: "" });
+	t.after(() => {
+		w2.child.kill();
+	});
+	const line2 = await w2.waitFor((l) => l.includes("PREREQUISITE FAILURE"), "missing-origin failure");
+	assert.match(line2, /origin/);
+
 	await sleep(200);
 	// Nothing at all was consumed: no SSE lease/stream activity AND no
 	// legacy /notifications?timeout= long-poll.

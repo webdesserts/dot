@@ -6,7 +6,9 @@
  * Read fresh on each spawn; use /reload or restart/resume after updates.
  * This adapter currently:
  *
- *   - long-polls the daemon's notification endpoint (20s server hold)
+ *   - consumes the daemon's presentation-SSE stream by DEFAULT (the
+ *     legacy long-poll below now needs an explicit AUTONOMY_SSE_MODE=0)
+ *   - legacy mode long-polls the daemon's notification endpoint (20s hold)
  *   - transport pacing: a small floor between HTTP requests. Undismissed
  *     persistent rows make /notifications return IMMEDIATELY on every
  *     request, so repeat suppression alone would turn the poll loop into
@@ -79,8 +81,9 @@
  * dropped while the agent is busy).
  *
  * Config via env: AUTONOMY_BASE (default http://127.0.0.1:4600),
- * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"; used only for the
- * auth header), AUTONOMY_TOKEN (optional bearer for proxied daemons),
+ * AUTONOMY_ACTOR (default "iris" — rhea sets "rhea"; LEGACY long-poll
+ * auth header only: SSE identity comes from authenticated /whoami),
+ * AUTONOMY_TOKEN (optional bearer for proxied daemons),
  * AUTONOMY_HEARTBEAT_MS (default 1800000, 0 disables; ambient mode only),
  * AUTONOMY_ERROR_BACKOFF_MS (default 5000), AUTONOMY_FETCH_TIMEOUT_MS
  * (default 30000 — must exceed the 20s server hold so a hung response
@@ -98,6 +101,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
 	ACK_PATH,
+	ConfigError,
 	CUSTOM_TYPE,
 	GateError,
 	LEASE_CLAIM_PATH,
@@ -109,6 +113,8 @@ import {
 	STREAM_PATH,
 	WHOAMI_PATH,
 	createSseParser,
+	isSafeNonNegativeInteger,
+	isUuidShape,
 	parseTrustedOrigin,
 	readQualifyingReceipts,
 	validateAckResponse,
@@ -456,36 +462,52 @@ const poll = async () => {
 };
 
 // ═════════════════════════════════════════════════════════════════
-// ── opt-in SSE presentation mode (autonomy/t:276 initial guest slice) ──
+// ── default presentation-SSE mode (autonomy/t:276) ────────────────
 // ═════════════════════════════════════════════════════════════════
 //
-// Disabled by default. With AUTONOMY_SSE_MODE=1 the worker consumes
-// POST /notifications/presentation/stream (fetch streaming — NEVER
-// EventSource, no readiness-only redesign, no prepare polling pump)
-// instead of the legacy long-poll. There is NO fallback to legacy
-// consumption: missing config, auth refusal or transport failure is a
-// visible static-class prerequisite failure, and the goal-heartbeat
-// machinery above keeps working unchanged. Everything HTTP/lease/
-// reconnect lives HERE, in the worker, independently of model busy time.
+// The worker consumes POST /notifications/presentation/stream (fetch
+// streaming — NEVER EventSource, no readiness-only redesign, no prepare
+// polling pump) instead of the legacy long-poll, which now requires an
+// explicit AUTONOMY_SSE_MODE=0 opt-out and is preserved unchanged for
+// now. There is NO fallback to legacy consumption: invalid setup,
+// missing identity, auth refusal or transport failure is a visible
+// static-class prerequisite failure, and the goal-heartbeat machinery
+// above keeps working unchanged. Everything HTTP/lease/reconnect lives
+// HERE, in the worker, independently of model busy time.
 //
-// Explicit operator configuration (all required — no defaults are
-// invented, and SSE mode never defaults the recipient to Iris):
-//   AUTONOMY_SSE_MODE                  "1" to opt in
-//   AUTONOMY_BASE                      trusted base origin (http(s), no
-//                                      path, no embedded credentials)
-//   AUTONOMY_ACTOR                     recipient actor handle (identity header)
-//   AUTONOMY_SSE_EXPECTED_ACTOR_ID     registry actor uuid that /whoami's
-//                                      actor_id MUST equal (null or
-//                                      mismatched is a visible
-//                                      prerequisite failure)
-//   AUTONOMY_SSE_SCOPE                 backend/store scope for receipt
-//                                      metadata (never derived from cwd)
-//   AUTONOMY_SSE_RENEW_INTERVAL_MS     lease renewal interval (explicit;
-//                                      not copied fixture policy)
+// Normal setup needs exactly the trusted base/auth connection the caller
+// already owns — the base origin is REQUIRED (never implicit), and no separately configured display handle, copied UUID,
+// scope or renewal interval is mandatory:
+//   AUTONOMY_SSE_MODE                  "0" opts out into the legacy
+//                                      long-poll (default: SSE on)
+//   AUTONOMY_BASE                      REQUIRED trusted base origin
+//                                      (http(s), no path, no embedded
+//                                      credentials; never implicit — a
+//                                      credential is never sent to an
+//                                      under-specified origin)
+//   AUTONOMY_SSE_EXPECTED_ACTOR_ID     OPTIONAL pin: /whoami's actor_id
+//                                      MUST equal it (null or mismatched
+//                                      is a visible prerequisite failure)
+//   AUTONOMY_SSE_SCOPE                 OPTIONAL receipt-scope override;
+//                                      defaults to the trusted origin —
+//                                      a consistency namespace for
+//                                      receipt metadata only, never
+//                                      routing/authorization or a
+//                                      server-issued store id
+//   AUTONOMY_SSE_RENEW_INTERVAL_MS     OPTIONAL explicit positive lease
+//                                      renewal interval; by default the
+//                                      delay derives from the server's
+//                                      remaining lease budget (one
+//                                      third, floored and capped)
 //   AUTONOMY_TOKEN                     optional bearer token, OR
 //   AUTONOMY_SESSION_COOKIE_FILE       path to a private session-cookie file
 //   AUTONOMY_SSE_RECONNECT_BACKOFF_MS  optional reconnect backoff base
 //                                      (default 5000, clamped 50..60000)
+// Identity: the authoritative ActorId and the display/receipt handle
+// are resolved from authenticated GET /whoami — carried by the ACTUAL
+// credential, never a fabricated actor header — and FROZEN for the
+// worker lifetime; a missing/null/malformed identity refuses. Explicit
+// credentials remain required (bearer token or session-cookie file).
 // Credentials stay in process memory: never in URLs, argv or logs.
 // Grant/recovery secrets also stay in process memory — after a process
 // replacement the worker visibly waits/reacquires WITHOUT takeover
@@ -498,37 +520,61 @@ const SSE_MAX_LINE_BYTES = 131_072; // bounded framing line
 const SSE_UNCERTAIN_RETRIES = 3; // identical-request retries for uncertain claim/renew/ack
 const SSE_UNCERTAIN_BACKOFF_MS = 300; // base wait between uncertain retries (documented bound)
 const SSE_OWNERSHIP_ATTEMPTS = 6; // bounded status/claim attempts per acquisition pass
+const RENEW_MIN_DELAY_MS = 50; // busy-loop bound only: short budgets still renew BEFORE expiry
+const RENEW_MAX_DELAY_MS = 600_000; // reasonable maximum renewal delay
 
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 
+/** A static identity-prerequisite refusal — no dynamic value is ever echoed. */
+const identityRefusal = (reason) => {
+	const failure = new Error(
+		`identity prerequisite FAILED: ${reason} — refusing to infer or mint an identity`,
+	);
+	failure.identityMismatch = true;
+	return failure;
+};
+
 /**
- * Load and validate the SSE configuration. Returns null when the mode is
- * not opted into (legacy long-poll remains the default), a config object
- * when everything required is present, or {invalid: [static reasons]}
- * when opted in but incomplete — which is a VISIBLE prerequisite failure,
- * never a silent fallback to legacy consumption.
+ * Load and validate the SSE configuration. SSE is the DEFAULT; an
+ * explicit AUTONOMY_SSE_MODE=0 opts out (legacy long-poll). Returns a
+ * config object when everything required (trusted origin, credentials)
+ * is present, or {invalid: [static reasons]} — a VISIBLE prerequisite
+ * failure, never a silent fallback to legacy consumption. Identity,
+ * scope and renewal are resolved at runtime, not here.
  */
 const loadSseConfig = (env) => {
-	if (env.AUTONOMY_SSE_MODE !== "1") return null;
+	if (env.AUTONOMY_SSE_MODE === "0") return null;
 	const reasons = [];
 	let origin = null;
 	try {
+		// REQUIRED for SSE — the trusted base/auth boundary is explicit; the
+		// implicit localhost default belongs to the legacy long-poll only.
 		origin = parseTrustedOrigin(env.AUTONOMY_BASE ?? "");
 	} catch (err) {
 		reasons.push(err instanceof ConfigError ? err.message : "trusted base origin invalid");
 	}
-	const actor = typeof env.AUTONOMY_ACTOR === "string" ? env.AUTONOMY_ACTOR.trim() : "";
-	if (!actor) reasons.push("the recipient actor must be explicitly configured");
+	// Optional pin only: the authoritative ActorId comes from /whoami.
 	const expectedActorId =
 		typeof env.AUTONOMY_SSE_EXPECTED_ACTOR_ID === "string"
 			? env.AUTONOMY_SSE_EXPECTED_ACTOR_ID.trim()
 			: "";
-	if (!expectedActorId) reasons.push("the expected registry actor id must be explicitly configured");
-	const scope = typeof env.AUTONOMY_SSE_SCOPE === "string" ? env.AUTONOMY_SSE_SCOPE.trim() : "";
-	if (!scope) reasons.push("the backend scope must be explicitly configured");
-	const renewMs = Number(env.AUTONOMY_SSE_RENEW_INTERVAL_MS ?? Number.NaN);
-	if (!Number.isSafeInteger(renewMs) || renewMs <= 0 || renewMs > 2 ** 31 - 1) {
-		reasons.push("the lease renewal interval must be explicitly configured as a positive integer ms");
+	// Scope defaults to the canonical trusted origin — a consistency
+	// namespace for receipt metadata, NOT routing/authorization or a
+	// server-issued store id. The explicit override remains for isolated
+	// tests / unusual store resets.
+	const scopeOverride = typeof env.AUTONOMY_SSE_SCOPE === "string" ? env.AUTONOMY_SSE_SCOPE.trim() : "";
+	const scope = scopeOverride || origin;
+	// Renewal defaults from the server's remaining lease budget; an
+	// explicit positive interval override replaces that derivation.
+	let renewMs = null;
+	const renewRaw = env.AUTONOMY_SSE_RENEW_INTERVAL_MS;
+	if (renewRaw !== undefined && renewRaw !== "") {
+		const renewParsed = Number(renewRaw ?? Number.NaN);
+		if (!Number.isSafeInteger(renewParsed) || renewParsed <= 0 || renewParsed > 2 ** 31 - 1) {
+			reasons.push("the lease renewal interval override must be a positive integer ms");
+		} else {
+			renewMs = renewParsed;
+		}
 	}
 	const token = typeof env.AUTONOMY_TOKEN === "string" ? env.AUTONOMY_TOKEN : "";
 	const cookieFilePath =
@@ -546,7 +592,7 @@ const loadSseConfig = (env) => {
 		reasons.push("explicit credentials are required (bearer token or session-cookie file)");
 	}
 	if (reasons.length > 0) return { invalid: reasons };
-	return { origin, actor, expectedActorId, scope, renewMs, token, cookie };
+	return { origin, expectedActorId, scope, renewMs, token, cookie };
 };
 
 /**
@@ -556,7 +602,8 @@ const loadSseConfig = (env) => {
  * VALID ownership — never legacy fallback, never takeover.
  */
 const sseMain = async (config) => {
-	let lease = null; // {runtimeId, epoch, grantSecret, sequence} — process memory only
+	let lease = null; // {runtimeId, epoch, grantSecret, sequence, renewDelayMs} — process memory only
+	let identity = null; // {actorId, actor} — FROZEN for the worker lifetime once validated
 	let renewalTimer = null;
 	let lastFailureClass = null;
 	let consecutiveFailures = 0;
@@ -592,9 +639,13 @@ const sseMain = async (config) => {
 	const scheduleRenewal = () => {
 		stopRenewal();
 		if (!lease) return;
+		// A non-positive/unknown delay never schedules: renewal must never
+		// become a zero-delay busy loop.
+		if (!Number.isSafeInteger(lease.renewDelayMs) || lease.renewDelayMs <= 0) return;
 		// SERIALIZED renewal: the next timer is armed only AFTER the current
-		// renewal completes, so two renewals can never overlap or double-
-		// handle the same next sequence.
+		// renewal completes (renewLease re-arms from ITS validated response
+		// via the trailing scheduleRenewal below), so two renewals can never
+		// overlap or double-handle the same next sequence.
 		renewalTimer = setTimeout(async () => {
 			renewalTimer = null;
 			try {
@@ -603,13 +654,36 @@ const sseMain = async (config) => {
 				// renewLease handles its own failures (including dropping the
 				// lease); an unexpected throw must not break the chain.
 			}
-			scheduleRenewal();
-		}, config.renewMs);
+			scheduleRenewal(); // re-arms ONLY while the lease is still held
+		}, lease.renewDelayMs);
 		renewalTimer.unref?.();
 	};
 
+	/**
+	 * Aim to renew after one third of the remaining budget. The positive
+	 * floor avoids busy loops; budgets at or below that floor can expire
+	 * before renewal and must recover through normal lease acquisition.
+	 * An explicit interval override replaces this derivation.
+	 */
+	const renewalDelayFor = (deadlineRemainingMs) => {
+		if (config.renewMs !== null) return config.renewMs;
+		if (!isSafeNonNegativeInteger(deadlineRemainingMs)) return null;
+		const third = Math.floor(deadlineRemainingMs / 3);
+		return clampNumber(third > 0 ? third : RENEW_MIN_DELAY_MS, RENEW_MIN_DELAY_MS, RENEW_MAX_DELAY_MS);
+	};
+
 	const identityHeaders = () => {
-		const headers = { "X-Auth-User": config.actor, "content-type": "application/json" };
+		// The VALIDATED handle (never a fabricated one) plus the credential.
+		const headers = { "X-Auth-User": identity.actor, "content-type": "application/json" };
+		if (config.token) headers.Authorization = `Bearer ${config.token}`;
+		if (config.cookie) headers.Cookie = config.cookie;
+		return headers;
+	};
+
+	const credentialHeaders = () => {
+		// The INITIAL whoami relies on the actual credential alone — never
+		// a fabricated actor header.
+		const headers = { "content-type": "application/json" };
 		if (config.token) headers.Authorization = `Bearer ${config.token}`;
 		if (config.cookie) headers.Cookie = config.cookie;
 		return headers;
@@ -651,9 +725,52 @@ const sseMain = async (config) => {
 	};
 
 	/**
-	 * GET /whoami actor_id MUST equal the configured expected actor.
-	 * A null or mismatched id is a visible prerequisite failure — never an
-	 * invitation to infer or mint an actor.
+	 * Authoritative identity: GET /whoami carried by the ACTUAL credential
+	 * only. The ActorId and the display/receipt handle are derived from
+	 * the validated response; a missing/null/malformed identity refuses —
+	 * never an invitation to infer or mint an actor. The optional explicit
+	 * pin must match when configured.
+	 */
+	const resolveIdentity = async () => {
+		let response;
+		try {
+			response = await fetch(`${config.origin}${WHOAMI_PATH}`, {
+				headers: credentialHeaders(),
+				redirect: "error",
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			});
+		} catch {
+			const uncertain = new Error("transport uncertainty on the identity prerequisite");
+			uncertain.uncertain = true;
+			throw uncertain;
+		}
+		if (!response.ok) {
+			const refused = new Error(`identity prerequisite refused (HTTP ${response.status}, static class)`);
+			refused.httpStatus = response.status;
+			throw refused;
+		}
+		const whoami = validateWhoami(await response.json());
+		// ActorId boundary: the registry-issued UUID shape (any variant),
+		// the optional pin, and a USABLE display handle — all checked here;
+		// static refusals never reflect the offending values.
+		if (!isUuidShape(whoami.actor_id)) {
+			throw identityRefusal("the authenticated response carries no well-formed ActorId (UUID shape)");
+		}
+		if (config.expectedActorId && whoami.actor_id !== config.expectedActorId) {
+			throw identityRefusal("the resolved actor_id does not match the configured expected actor");
+		}
+		const actor = typeof whoami.user === "string" ? whoami.user.trim() : "";
+		if (!actor) {
+			throw identityRefusal("the authenticated response carries no usable display handle");
+		}
+		return { actorId: whoami.actor_id, actor };
+	};
+
+	/**
+	 * Re-verify the FROZEN identity on each reconnect: /whoami (now
+	 * carried by the validated identity) must still return the same
+	 * ActorId. A null or changed id refuses — the identity is never
+	 * re-derived mid-lifetime.
 	 */
 	const verifyIdentity = async () => {
 		let response;
@@ -674,13 +791,8 @@ const sseMain = async (config) => {
 			throw refused;
 		}
 		const whoami = validateWhoami(await response.json());
-		if (whoami.actor_id === null || whoami.actor_id !== config.expectedActorId) {
-			const failure = new Error(
-				"identity prerequisite FAILED: the resolved actor_id is null or does not match the " +
-					"configured expected actor — refusing to infer or mint an identity",
-			);
-			failure.identityMismatch = true;
-			throw failure;
+		if (whoami.actor_id !== identity.actorId) {
+			throw identityRefusal("the resolved actor_id no longer matches the frozen worker identity");
 		}
 	};
 
@@ -712,6 +824,7 @@ const sseMain = async (config) => {
 						epoch: grant.epoch,
 						grantSecret: grant.grant_secret,
 						sequence: 0,
+						renewDelayMs: renewalDelayFor(grant.deadline_remaining_ms),
 					};
 					scheduleRenewal();
 					return lease;
@@ -753,6 +866,7 @@ const sseMain = async (config) => {
 					epoch: grant.epoch,
 					grantSecret: grant.grant_secret,
 					sequence: 0,
+					renewDelayMs: renewalDelayFor(grant.deadline_remaining_ms),
 				};
 				scheduleRenewal();
 				return lease;
@@ -800,8 +914,12 @@ const sseMain = async (config) => {
 		};
 		for (let attempt = 1; attempt <= SSE_UNCERTAIN_RETRIES; attempt++) {
 			try {
-				await gatedPost(LEASE_RENEW_PATH, body, validateRenewResponse);
-				if (lease === current) current.sequence = next; // validated success only
+				const renewed = await gatedPost(LEASE_RENEW_PATH, body, validateRenewResponse);
+				if (lease === current) {
+					current.sequence = next; // validated success only
+					// Re-arm from the server's fresh remaining budget.
+					current.renewDelayMs = renewalDelayFor(renewed.deadline_remaining_ms);
+				}
 				return;
 			} catch (err) {
 				if (err instanceof GateError) {
@@ -852,12 +970,13 @@ const sseMain = async (config) => {
 	 */
 	const reconcileNow = async () => {
 		if (!sseSessionFile || !sseSessionId) return;
+		if (!identity) return; // the frozen identity is not resolved yet; a later reconcile qualifies
 		const read = readQualifyingReceipts(
 				sseSessionFile,
 				sseSessionId,
 				config.scope,
-				config.actor,
-				config.expectedActorId,
+				identity.actor,
+				identity.actorId,
 			);
 		if (!read.ok) {
 			emitOncePerClass(`disk receipts unreadable (${read.reason}) — nothing acknowledged`);
@@ -895,8 +1014,8 @@ const sseMain = async (config) => {
 				sseSessionFile,
 				sseSessionId,
 				config.scope,
-				config.actor,
-				config.expectedActorId,
+				identity.actor,
+				identity.actorId,
 			);
 				const stillThere =
 					read.ok &&
@@ -950,11 +1069,11 @@ const sseMain = async (config) => {
 			details: {
 				schema: METADATA_SCHEMA_VERSION,
 				scope: config.scope,
-				recipient: config.actor,
-				// The VALIDATED STABLE registry actor id (/whoami actor_id was
-				// checked against the configured expected value), not only the
-				// mutable handle. Receipt qualification binds BOTH.
-				actorId: config.expectedActorId,
+				recipient: identity.actor,
+				// The VALIDATED STABLE registry actor id resolved from
+				// /whoami (checked against the optional pin when set), not
+				// only the mutable handle. Receipt qualification binds BOTH.
+				actorId: identity.actorId,
 				renderVersion: SUPPORTED_RENDER_VERSION,
 				digest: offer.digest,
 				presentationId: offer.presentation_id,
@@ -1048,7 +1167,14 @@ const sseMain = async (config) => {
 	// ── the loop ──
 	while (running) {
 		try {
-			await verifyIdentity();
+			if (!identity) {
+				// First resolution — the credential alone speaks; the result is
+				// frozen for the worker lifetime.
+				identity = await resolveIdentity();
+			} else {
+				// Re-verify the frozen identity before each reconnect.
+				await verifyIdentity();
+			}
 			await ensureOwnership();
 			await connectStream();
 			lastFailureClass = null; // recovery clears the quiet-until-changed rule
@@ -1067,9 +1193,10 @@ const sseMain = async (config) => {
 	stopRenewal();
 };
 
-// ── mode dispatch: legacy long-poll remains the DEFAULT; SSE only when ──
-// explicitly opted in. Invalid SSE configuration is heartbeat-only with a
-// visible prerequisite failure — never silent legacy fallback.
+// ── mode dispatch: SSE is the DEFAULT; the legacy long-poll requires an ──
+// explicit AUTONOMY_SSE_MODE=0 opt-out. Invalid SSE configuration is
+// heartbeat-only with a visible prerequisite failure — never a silent
+// legacy fallback.
 const sseConfig = loadSseConfig(process.env);
 if (sseConfig && sseConfig.invalid) {
 	emit(

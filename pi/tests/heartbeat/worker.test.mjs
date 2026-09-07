@@ -1,6 +1,9 @@
 /**
  * Behavioral tests for the goal-heartbeat worker
- * (pi/extensions/notifications.worker.mjs).
+ * (pi/extensions/notifications.worker.mjs) in the LEGACY long-poll mode
+ * (explicit AUTONOMY_SSE_MODE=0; SSE presentation streaming is the
+ * worker's default transport and is covered by
+ * tests/notifications-sse/worker.test.mjs).
  *
  * Each test spawns the worker as a real child process and points it at a
  * local fake HTTP server that scripts long-poll responses. No live daemon,
@@ -59,6 +62,7 @@ function spawnWorker(port, extraEnv = {}) {
 	const child = spawn(process.execPath, [WORKER_PATH], {
 		env: {
 			...process.env,
+			AUTONOMY_SSE_MODE: "0", // legacy long-poll: what these fixtures exercise
 			AUTONOMY_BASE: `http://127.0.0.1:${port}`,
 			AUTONOMY_ACTOR: "iris",
 			AUTONOMY_TOKEN: "",

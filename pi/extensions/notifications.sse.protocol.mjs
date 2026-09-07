@@ -83,6 +83,18 @@ export function isDigestShape(value) {
 	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
+/**
+ * Any canonical UUID shape (8-4-4-4-12 lowercase hex) — NO version
+ * restriction. A shape check for registry-issued ActorIds; never echoes
+ * or transforms the value.
+ */
+export function isUuidShape(value) {
+	return (
+		typeof value === "string" &&
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+	);
+}
+
 function requireString(endpoint, object, field) {
 	const value = object?.[field];
 	if (typeof value !== "string" || value.length === 0) {

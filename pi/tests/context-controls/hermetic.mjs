@@ -26,6 +26,7 @@ const ORIGINAL_ENV = {
 	timeout: process.env.AUTONOMY_FETCH_TIMEOUT_MS,
 	hb: process.env.AUTONOMY_HEARTBEAT_MS,
 	backoff: process.env.AUTONOMY_ERROR_BACKOFF_MS,
+	sse: process.env.AUTONOMY_SSE_MODE,
 	child: process.env.PI_SUBAGENT_CHILD,
 };
 
@@ -35,6 +36,9 @@ export const setFakeAutonomyEnv = (base) => {
 	process.env.AUTONOMY_FETCH_TIMEOUT_MS = "2000";
 	process.env.AUTONOMY_HEARTBEAT_MS = "0";
 	process.env.AUTONOMY_ERROR_BACKOFF_MS = "200";
+	// These fixtures exercise the LEGACY long-poll transport; an explicit
+	// opt-out keeps the default-on SSE mode out of the way.
+	process.env.AUTONOMY_SSE_MODE = "0";
 };
 
 export const restoreOriginalEnv = () => {
@@ -44,6 +48,7 @@ export const restoreOriginalEnv = () => {
 		AUTONOMY_FETCH_TIMEOUT_MS: ORIGINAL_ENV.timeout,
 		AUTONOMY_HEARTBEAT_MS: ORIGINAL_ENV.hb,
 		AUTONOMY_ERROR_BACKOFF_MS: ORIGINAL_ENV.backoff,
+		AUTONOMY_SSE_MODE: ORIGINAL_ENV.sse,
 	})) {
 		if (v === undefined) delete process.env[k];
 		else process.env[k] = v;

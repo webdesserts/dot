@@ -21,6 +21,7 @@ import {
 	GateError,
 	SseFrameError,
 	createSseParser,
+	isUuidShape,
 	parseTrustedOrigin,
 	readQualifyingReceipts,
 	validateAckResponse,
@@ -33,8 +34,6 @@ import {
 
 const sha256Hex = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
 
-// ── whoami ────────────────────────────────────────────────────────────────
-
 test("whoami accepts the exact used shape and nothing else", () => {
 	assert.deepEqual(validateWhoami({ user: "rhea", actor_id: "uuid-1" }), {
 		user: "rhea",
@@ -44,6 +43,17 @@ test("whoami accepts the exact used shape and nothing else", () => {
 	assert.throws(() => validateWhoami({ user: 7, actor_id: null }), GateError);
 	assert.throws(() => validateWhoami({ user: null, actor_id: ["x"] }), GateError);
 	assert.throws(() => validateWhoami("nope"), GateError);
+});
+
+test("actor id shape accepts any UUID variant and nothing else", () => {
+	assert.equal(isUuidShape("6f1c2a34-0000-4000-8000-000000000001"), true);
+	assert.equal(isUuidShape("00000000-0000-0000-0000-000000000000"), true, "no version restriction");
+	assert.equal(isUuidShape("garbage-not-a-uuid"), false);
+	assert.equal(isUuidShape("6F1C2A34-0000-4000-8000-000000000001"), false, "canonical lowercase");
+	assert.equal(isUuidShape("6f1c2a34000040008000000000000001"), false);
+	assert.equal(isUuidShape("   "), false);
+	assert.equal(isUuidShape(7), false);
+	assert.equal(isUuidShape(null), false);
 });
 
 // ── lease status/claim/renew gates ────────────────────────────────────────
