@@ -312,6 +312,119 @@ test("SSE worker: EOF reconnects under valid ownership and replays the outstandi
 	assert.equal(statuses.length, 1, "no status polling between reconnects");
 });
 
+// ── recorded-receipt replay suppression (t276 late-frame fix) ────────────
+
+// A delayed SAME frame (same connection or reconnect) must not produce a
+// second custom_message once a fully qualifying recorded receipt exists.
+test("SSE worker: a delayed same offer is not re-delivered once its qualifying receipt is recorded", async (t) => {
+	let streamRes = null;
+	const fake = makeFakeServer({
+		onStream: (req, res) => {
+			streamRes = res;
+			presentationEvent(res, OFFER); // connection stays open
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	// First delivery of A.
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "first deliver");
+
+	// The supervisor renders it and qualifying disk bytes are recorded; the
+	// offer is acknowledged (idempotently).
+	const sessionFile = writeSessionFile(OFFER.body, 7, origin);
+	w.send({ event: "session", sessionId: "sess-1", sessionFile });
+	w.send({ event: "reconcile" });
+	await w.waitFor((l) => l.includes('"kind":"ack"'), "ack outcome");
+
+	// A delayed SAME frame arrives on the SAME connection.
+	presentationEvent(streamRes, OFFER);
+	await sleep(300);
+
+	const delivers = w.lines.filter((l) => l.includes('"kind":"deliver"'));
+	assert.equal(delivers.length, 1, "no second deliver for a recorded qualifying receipt");
+	// Every ack is truthful and idempotent for this exact receipt.
+	assert.ok(fake.acks.length >= 1 && fake.acks.length <= 2, `acks: ${JSON.stringify(fake.acks)}`);
+	for (const ack of fake.acks) {
+		assert.deepEqual(ack, { presentation_id: 7, expected_digest: sha256Hex(OFFER.body) });
+	}
+});
+
+// IDs are immutable: a same-ID offer whose evidence differs must not be
+// suppressed by the recorded receipt — and must not be dressed up as a
+// "new revision" either; it simply does not match.
+test("SSE worker: a same-ID offer with differing evidence is not suppressed by the recorded receipt", async (t) => {
+	let streamRes = null;
+	const fake = makeFakeServer({
+		onStream: (req, res) => {
+			streamRes = res;
+			presentationEvent(res, OFFER);
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "first deliver");
+	const sessionFile = writeSessionFile(OFFER.body, 7, origin);
+	w.send({ event: "session", sessionId: "sess-1", sessionFile });
+
+	const changedBody = "a different server-rendered body";
+	const changed = {
+		presentation_id: 7,
+		content_offer_id: null,
+		summary_offer_id: null,
+		body: changedBody,
+		render_version: 1,
+		digest: sha256Hex(changedBody),
+	};
+	presentationEvent(streamRes, changed);
+	await w.waitFor(
+		(l) => l.includes('"kind":"deliver"') && w.lines.filter((x) => x.includes('"kind":"deliver"')).length >= 2,
+		"second deliver for the differing evidence",
+	);
+});
+
+// Unqualified receipt evidence (wrong scope here) never suppresses delivery.
+test("SSE worker: an unqualified recorded receipt does not suppress the delayed same offer", async (t) => {
+	let streamRes = null;
+	const fake = makeFakeServer({
+		onStream: (req, res) => {
+			streamRes = res;
+			presentationEvent(res, OFFER);
+		},
+	});
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "first deliver");
+	// Recorded under a scope that does not qualify for this worker.
+	const sessionFile = writeSessionFile(OFFER.body, 7, "some-other-scope");
+	w.send({ event: "session", sessionId: "sess-1", sessionFile });
+
+	presentationEvent(streamRes, OFFER);
+	await w.waitFor(
+		(l) => l.includes('"kind":"deliver"') && w.lines.filter((x) => x.includes('"kind":"deliver"')).length >= 2,
+		"second deliver despite unqualified receipt",
+	);
+});
+
 // ── malformed-frame refusal ──────────────────────────────────────────────
 
 test("SSE worker: a malformed presentation frame is refused with no delivery and no ack", async (t) => {

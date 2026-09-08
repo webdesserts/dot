@@ -1061,6 +1061,37 @@ const sseMain = async (config) => {
 			emitOncePerClass("presentation body hash mismatch refused — no delivery");
 			return;
 		}
+		// Recorded-receipt replay guard: a fully qualifying disk receipt with
+		// the COMPLETE offer tuple (presentation id, digest, both part refs)
+		// means this exact offer was already presented — a delayed/replayed
+		// same frame is not re-delivered; serialized reconciliation acks it
+		// instead. Unqualified or differing evidence, or an unreadable/absent
+		// session binding, suppresses nothing (fail-open, as before).
+		if (sseSessionFile && sseSessionId && identity) {
+			const read = readQualifyingReceipts(
+				sseSessionFile,
+				sseSessionId,
+				config.scope,
+				identity.actor,
+				identity.actorId,
+			);
+			if (read.ok) {
+				const recorded = read.receipts.find(
+					(r) =>
+						!r.refused &&
+						r.presentationId === offer.presentation_id &&
+						r.digest === offer.digest &&
+						r.contentOfferId === offer.content_offer_id &&
+						r.summaryOfferId === offer.summary_offer_id,
+				);
+				if (recorded) {
+					queueReconcile();
+					return;
+				}
+				// Same id with differing evidence never matches (ids are
+				// immutable) — it falls through and delivers as any other offer.
+			}
+		}
 		emit("deliver", {
 			customType: CUSTOM_TYPE,
 			// The EXACT server-rendered body — never rerendered, never reconstructed.
