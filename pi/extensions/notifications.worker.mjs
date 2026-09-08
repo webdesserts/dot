@@ -126,6 +126,8 @@ import {
 	verifyOfferDigest,
 } from "./notifications.sse.protocol.mjs";
 
+import { openDedicatedStream } from "./notifications.stream-transport.mjs";
+
 const BASE = process.env.AUTONOMY_BASE ?? "http://127.0.0.1:4600";
 const ACTOR = process.env.AUTONOMY_ACTOR ?? "iris";
 const TOKEN = process.env.AUTONOMY_TOKEN ?? "";
@@ -1288,6 +1290,17 @@ const sseMain = async (config) => {
 	 * refusal, ownership-drop abort) — an error exit must NEVER clear the
 	 * failure state as if the stream had recovered. Transport uncertainty
 	 * still throws into the loop's failure path.
+	 *
+	 * STREAM/CONTROL SEPARATION (autonomy/t:277): the stream is opened
+	 * through openDedicatedStream — ONE unpooled HTTP/1.1 connection
+	 * (agent:false, ALPN restricted to http/1.1 for this request, TLS
+	 * verification untouched) — so a held stream can never block the
+	 * pooled H2 connection the control requests (gatedPost/whoami) share.
+	 * The helper preserves exactly the guards fetch gave this call site:
+	 * redirects refused (credentials never travel elsewhere), the
+	 * AbortSignal honored before AND after headers, and a rejection —
+	 * never a clean end — on abort, so the ownership-drop classification
+	 * below keeps working.
 	 */
 	const connectStream = async () => {
 		const current = lease;
@@ -1305,18 +1318,19 @@ const sseMain = async (config) => {
 				presentationEvents,
 			});
 		};
-		let response;
+		// The helper ALWAYS provides a body on resolve, so no null-body
+		// check is needed here (the transport contract, not a gate).
+		let response = null;
 		try {
 			traceEvent("connectStream", "stream_fetch_start", {});
-			response = await fetch(`${config.origin}${STREAM_PATH}`, {
-				method: "POST",
+			response = await openDedicatedStream({
+				url: new URL(`${config.origin}${STREAM_PATH}`),
 				headers: identityHeaders(),
 				body: JSON.stringify({
 					runtime_id: current.runtimeId,
 					epoch: current.epoch,
 					grant_secret: current.grantSecret,
 				}),
-				redirect: "error",
 				signal: controller.signal,
 			});
 		} catch {
@@ -1328,6 +1342,7 @@ const sseMain = async (config) => {
 		}
 		traceEvent("connectStream", "stream_headers", { httpStatus: response.status });
 		if (!response.ok) {
+			response.destroy(); // non-success: release the owned socket immediately
 			clearTimeout(lifetime);
 			traceEvent("connectStream", "stream_failure", {
 				failureClass: "http_refused",
@@ -1336,11 +1351,6 @@ const sseMain = async (config) => {
 			const refused = new Error(`presentation stream refused (HTTP ${response.status}, static class)`);
 			refused.httpStatus = response.status;
 			throw refused;
-		}
-		if (!response.body) {
-			clearTimeout(lifetime);
-			traceEvent("connectStream", "stream_failure", { failureClass: "http_refused" });
-			throw new Error("presentation stream returned no body (static class)");
 		}
 		traceEvent("connectStream", "stream_open", {});
 		const parser = createSseParser({ maxEventBytes: SSE_MAX_EVENT_BYTES, maxLineBytes: SSE_MAX_LINE_BYTES });
@@ -1398,6 +1408,9 @@ const sseMain = async (config) => {
 		} finally {
 			if (streamController === controller) streamController = null;
 			clearTimeout(lifetime);
+			// EVERY exit releases the dedicated socket (a no-op after a clean
+			// EOF, where it is already closed).
+			response.destroy();
 		}
 	};
 
