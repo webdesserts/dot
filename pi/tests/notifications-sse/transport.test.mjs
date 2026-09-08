@@ -1,16 +1,13 @@
 /**
- * Stream/control transport separation tests for the presentation-SSE
- * worker (autonomy/t:277).
+ * Native-H2 transport tests for the presentation-SSE worker (autonomy/t:277).
  *
- * REGRESSION UNDER TEST: on a Node/Undici runtime that upgrades the
- * shared TLS connection to HTTP/2, the long-lived SSE stream shared ONE
- * H2 connection with every control request — and a held stream blocked
- * them: lease renewals issued while the stream was held never completed
- * until the stream ended, so short lease budgets expired server-side.
- * The fix gives the stream a DEDICATED HTTP/1.1 connection
- * (notifications.stream-transport.mjs: agent:false + ALPN restricted to
- * http/1.1 for that one request; TLS verification untouched) while
- * control requests keep the default fetch path.
+ * RUNTIME UNDER TEST: Node 26.8.1 with its bundled Undici 8.10 (the H2
+ * multiplexing fix landed upstream in Undici 8.8; the 26.4/Undici 8.5
+ * runtime was the known-broken one). The stream goes over plain native
+ * fetch — the SAME pooled connection the control requests use, upgraded
+ * to HTTP/2 when the server advertises it. There is no version detection
+ * and no fallback framework: on the tested runtime the H2 multiplexer
+ * lets lease renewals flow underneath a held stream.
  *
  * The TLS fixture advertises BOTH h2 and http/1.1 via ALPN (the
  * production shape) and enforces REAL lease expiry: a renewal arriving
@@ -32,8 +29,6 @@ import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { openDedicatedStream } from "../../extensions/notifications.stream-transport.mjs";
 
 const WORKER_PATH = new URL("../../extensions/notifications.worker.mjs", import.meta.url).pathname;
 const FIXTURE_CA = fileURLToPath(new URL("./fixtures/stream-tls/ca.pem", import.meta.url));
@@ -76,8 +71,8 @@ const openSse = (res) => {
 
 /**
  * Synthetic TLS fixture. ALPN advertises h2 + http/1.1 (allowHTTP1), so
- * an undici/fetch control request negotiates h2 while the dedicated
- * stream request negotiates http/1.1. Lease semantics are REAL: the
+ * a native fetch request negotiates h2 — exactly the production shape
+ * the worker sees. Lease semantics are REAL: the
  * grant expires budgetMs after the claim (and after each renewal); a
  * late or missing renewal is refused 410. `renewGoneAfter` (per claim)
  * additionally refuses renewals once that many succeeded, to exercise
@@ -311,13 +306,14 @@ const offerFor = (presentationId, body) => ({
 	},
 });
 
-// ── THE REGRESSION: held stream vs. lease renewals on an H2-advertising ──
-// TLS server. Pre-fix, renewals never completed while the stream was
-// held (they cannot even reach the server), so short budgets expired and
-// ownership was lost. Post-fix, the stream owns a dedicated HTTP/1.1
-// connection and control requests complete throughout.
+// ── THE RUNTIME CONTRACT: held stream vs. lease renewals on an ─────────
+// H2-advertising TLS server, both over plain native fetch. On the
+// tested runtime (Node 26.8.1 / Undici 8.10) the H2 multiplexer carries
+// the renewals underneath the held stream; with REAL expiry semantics,
+// any blocked/late renewal would be refused 410 — zero denials is the
+// whole point.
 
-test("stream/control separation: a held SSE stream runs on a dedicated HTTP/1.1 connection while >=3 lease budgets renew underneath it", { timeout: 30000 }, async (t) => {
+test("native H2 transport: a held SSE stream shares the pooled connection while >=3 lease budgets renew underneath it", { timeout: 30000 }, async (t) => {
 	const budgetMs = 1200; // derived renewal delay: one third = 400ms
 	const OFFER_A = offerFor(7, "the initial server-rendered body");
 	const OFFER_B = offerFor(8, "a genuinely new arrival after the initial offer");
@@ -400,15 +396,16 @@ test("stream/control separation: a held SSE stream runs on a dedicated HTTP/1.1 
 	}
 	assert.equal(fixture.deniedRenewals.length, 0, "no ownership loss under real expiry semantics");
 
-	// The stream ran on its own HTTP/1.1 connection, shared with nothing.
-	assert.equal(stream1.proto, "http/1.1", "the stream uses its dedicated HTTP/1.1 connection");
+	// The stream went over native fetch and negotiated HTTP/2 with the
+	// ALPN h2+http/1.1 fixture — the shared-connection production shape.
+	assert.equal(stream1.proto, "h2", "the stream uses native HTTP/2 via ALPN");
 	const controlPorts = new Set(
 		fixture.requests.filter((r) => r.url !== STREAM_PATH).map((r) => r.remotePort),
 	);
-	assert.ok(controlPorts.size > 0, "control requests used their own connection(s)");
+	assert.ok(controlPorts.size > 0, "control requests completed on their own schedule");
 	assert.ok(
-		!controlPorts.has(stream1.remotePort),
-		"no control request shares the stream's dedicated connection",
+		controlPorts.has(stream1.remotePort),
+		"control renewals multiplex over the SAME connection as the held stream",
 	);
 
 	// No ownership-loss stream_error anywhere.
@@ -472,10 +469,11 @@ test("stream transport: TLS errors still fail closed — no request is sent with
 	assert.equal(w.child.exitCode, null, "the worker keeps running");
 });
 
-// ── ownership drop closes the dedicated stream promptly; control keeps ───
-// working — the abort path must not wedge anything.
+// ── ownership drop closes the stream promptly; control keeps working ──
+// The abort path must not wedge anything (abort-after-headers must make
+// the body iteration REJECT, never masquerade as a clean end).
 
-test("ownership drop aborts the dedicated stream promptly and control requests keep completing", { timeout: 30000 }, async (t) => {
+test("ownership drop aborts the held stream promptly and control requests keep completing", { timeout: 30000 }, async (t) => {
 	const OFFER_C = offerFor(12, "delivery after honest re-acquisition");
 	const fixture = makeTlsFixture({
 		budgetMs: 900, // derived renewal delay: 300ms
@@ -516,7 +514,7 @@ test("ownership drop aborts the dedicated stream promptly and control requests k
 	assert.ok(stream1?.closedAt !== null, "the held stream connection closed");
 	assert.ok(
 		stream1.closedAt - firstDenial.at < 1000,
-		`the dedicated stream socket was released promptly after the drop (${stream1.closedAt - firstDenial.at}ms)`,
+		`the stream was released promptly after the drop (${stream1.closedAt - firstDenial.at}ms)`,
 	);
 	// Control requests completed AFTER the abort (nothing is wedged).
 	const controlAfter = fixture.requests.filter(
@@ -526,77 +524,4 @@ test("ownership drop aborts the dedicated stream promptly and control requests k
 		controlAfter.some((r) => r.url === "/notifications/lease/claim"),
 		"re-acquisition (whoami/status/claim) completed after the abort",
 	);
-});
-
-// ── direct abort-semantics unit tests of the stream transport ────────────
-// Plain HTTP is enough here: the abort contract is transport-independent.
-
-test("stream transport: abort BEFORE headers rejects the open and releases the socket", { timeout: 15000 }, async (t) => {
-	const server = http.createServer((req, res) => {
-		// "/never" deliberately never responds (the pre-header abort case);
-		// everything else answers immediately (the control-request check).
-		if (req.url !== "/never") {
-			res.writeHead(200);
-			res.end("ok");
-		}
-	});
-	const port = await listen(server);
-	const connections = [];
-	server.on("connection", (s) => connections.push(s));
-	try {
-		const controller = new AbortController();
-		const opened = openDedicatedStream({
-			url: new URL(`http://127.0.0.1:${port}/never`),
-			headers: {},
-			body: "x",
-			signal: controller.signal,
-		});
-		setTimeout(() => controller.abort(), 50);
-		await assert.rejects(opened, /aborted/);
-		await sleep(150);
-		const closed = connections.filter((s) => s.destroyed || s.readyState === "closed");
-		assert.equal(closed.length, connections.length, "the owned socket was released");
-		// A future control request on a fresh connection is unaffected.
-		const res = await fetch(`http://127.0.0.1:${port}/ok`, { signal: AbortSignal.timeout(1000) });
-		assert.equal(res.status, 200);
-		await res.text();
-	} finally {
-		server.close();
-		for (const s of connections) s.destroy();
-	}
-});
-
-test("stream transport: abort AFTER headers makes the body iteration reject — an abort is never a clean end", { timeout: 15000 }, async (t) => {
-	const server = http.createServer((req, res) => {
-		res.writeHead(200, { "content-type": "text/event-stream" });
-		res.flushHeaders(); // headers out, body held open
-	});
-	const port = await listen(server);
-	const connections = [];
-	server.on("connection", (s) => connections.push(s));
-	try {
-		const controller = new AbortController();
-		const response = await openDedicatedStream({
-			url: new URL(`http://127.0.0.1:${port}/stream`),
-			headers: {},
-			body: "x",
-			signal: controller.signal,
-		});
-		assert.equal(response.ok, true);
-		const iteration = (async () => {
-			for await (const chunk of response.body) {
-				void chunk;
-			}
-			return "clean";
-		})();
-		setTimeout(() => controller.abort(), 80);
-		await assert.rejects(iteration, /aborted/, "the abort must reject, not end cleanly");
-		response.destroy();
-		await sleep(150);
-		// The worker's exit classifier depends on this rejection; a clean
-		// end here would misreport an ownership-drop abort as recovery.
-	} finally {
-		server.close();
-		for (const s of connections) s.destroy();
-	}
 });
