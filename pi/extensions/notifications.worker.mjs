@@ -98,7 +98,7 @@
 
 import { stdin, stdout } from "node:process";
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { chmodSync, closeSync, openSync, readFileSync, writeSync } from "node:fs";
 import {
 	ACK_PATH,
 	ConfigError,
@@ -503,6 +503,12 @@ const poll = async () => {
 //   AUTONOMY_SESSION_COOKIE_FILE       path to a private session-cookie file
 //   AUTONOMY_SSE_RECONNECT_BACKOFF_MS  optional reconnect backoff base
 //                                      (default 5000, clamped 50..60000)
+//   AUTONOMY_SSE_TRACE_FILE            OPTIONAL opt-in diagnostics: a local
+//                                      file path. When set, bounded JSONL
+//                                      phase-trace records are appended
+//                                      there (disabled by default; see the
+//                                      trace section below for the exact
+//                                      record contract and bounds).
 // Identity: the authoritative ActorId and the display/receipt handle
 // are resolved from authenticated GET /whoami — carried by the ACTUAL
 // credential, never a fabricated actor header — and FROZEN for the
@@ -524,6 +530,111 @@ const RENEW_MIN_DELAY_MS = 50; // busy-loop bound only: short budgets still rene
 const RENEW_MAX_DELAY_MS = 600_000; // reasonable maximum renewal delay
 
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+// ── opt-in bounded phase trace (diagnostics only; DISABLED by default) ──
+// ONE explicit setting enables it: AUTONOMY_SSE_TRACE_FILE, a local file
+// path. While set, small JSONL records are appended there: monotonic
+// elapsed ms (t), phase/event enums, and public correlation only — NEVER
+// credentials, headers, bodies, dynamic error text or private content.
+// Bounds: at most 2000 records AND 1MB per process lifetime; reaching a
+// bound silently stops tracing for the process lifetime. ANY tracing
+// failure (unreadable path, full disk, closed fd) disables tracing and
+// NEVER affects ownership or delivery.
+//
+// Record fields (the complete allowed set):
+//   t                  monotonic elapsed ms since worker start
+//   phase              sseMain | ensureOwnership | scheduleRenewal |
+//                      renewLease | gatedPost | connectStream | dropLease
+//   event              phase-specific enum (see traceEvent call sites)
+//   pid                process correlation
+//   runtimeId/epoch/actorId  PUBLIC grant/identity correlation (never the
+//                      grant secret, never the credential)
+//   route              whoami | lease_status | lease_claim | lease_renew |
+//                      ack | stream
+//   httpStatus         returned status (public static class)
+//   outcome            validated DTO outcome enum (renewed/duplicate/…)
+//   failureClass       static failure enum (never a dynamic message)
+//   sequence           renewal sequence number
+//   budgetRemainingMs  server-returned remaining lease budget
+//   scheduledDelayMs / fireLatenessMs  timer scheduled vs actually fired
+//   durationMs         stream connection lifetime
+//   presentationEvents count of presentation frames on a stream
+//   reason             dropLease reason enum
+const TRACE_MAX_RECORDS = 2000;
+const TRACE_MAX_BYTES = 1_000_000;
+const TRACE_EPOCH = process.hrtime.bigint();
+
+const traceOpen = () => {
+	const file = process.env.AUTONOMY_SSE_TRACE_FILE;
+	if (typeof file !== "string" || file === "") return null;
+	try {
+		const fd = openSync(file, "a", 0o600);
+		chmodSync(file, 0o600); // restrictive permissions even if the file pre-existed
+		return { fd, records: 0, bytes: 0 };
+	} catch {
+		return null; // tracing is optional diagnostics — never required
+	}
+};
+let traceState = traceOpen();
+let traceRuntimeId = null;
+let traceEpoch = null;
+let traceActorId = null;
+
+const traceStop = () => {
+	if (!traceState) return;
+	try {
+		closeSync(traceState.fd);
+	} catch {}
+	traceState = null;
+};
+
+// Every allowed field; the record builder rejects anything else by construction.
+const traceEvent = (phase, event, fields = {}) => {
+	if (!traceState) return;
+	try {
+		if (traceState.records >= TRACE_MAX_RECORDS) {
+			traceStop();
+			return;
+		}
+		const record = { t: Number(process.hrtime.bigint() - TRACE_EPOCH) / 1e6, phase, event, pid: process.pid };
+		if (traceRuntimeId !== null) record.runtimeId = traceRuntimeId;
+		if (traceEpoch !== null) record.epoch = traceEpoch;
+		if (traceActorId !== null) record.actorId = traceActorId;
+		for (const [key, value] of Object.entries(fields)) {
+			if (value !== undefined && value !== null) record[key] = value;
+		}
+		const line = `${JSON.stringify(record)}\n`;
+		if (traceState.bytes + line.length > TRACE_MAX_BYTES) {
+			traceStop();
+			return;
+		}
+		writeSync(traceState.fd, line);
+		traceState.records += 1;
+		traceState.bytes += line.length;
+	} catch {
+		traceStop(); // a tracing failure never affects ownership/delivery
+	}
+};
+
+/** Static failure ENUM for traces — never a dynamic error message. */
+const traceFailureClass = (err) => {
+	if (err?.identityMismatch) return "identity_mismatch";
+	if (err instanceof GateError) return "gate_refusal";
+	if (err?.uncertain) return "transport_uncertain";
+	if (err?.httpStatus === 401 || err?.httpStatus === 403) return "auth_refused";
+	if (err?.httpStatus === 404 || err?.httpStatus === 410) return "ownership_gone";
+	if (err?.httpStatus === 409) return "conflict";
+	if (err?.httpStatus) return "http_refused";
+	return "connection_failed";
+};
+
+const TRACE_ROUTES = new Map([
+	[WHOAMI_PATH, "whoami"],
+	[LEASE_STATUS_PATH, "lease_status"],
+	[LEASE_CLAIM_PATH, "lease_claim"],
+	[LEASE_RENEW_PATH, "lease_renew"],
+	[ACK_PATH, "ack"],
+]);
 
 /** A static identity-prerequisite refusal — no dynamic value is ever echoed. */
 const identityRefusal = (reason) => {
@@ -624,7 +735,8 @@ const sseMain = async (config) => {
 	// is dropped so a connection never keeps reading under a dead proof.
 	let streamController = null;
 
-	const dropLease = () => {
+	const dropLease = (reason) => {
+		traceEvent("dropLease", "lease_dropped", { reason });
 		// Stop using ownership IMMEDIATELY: no further proof use, no
 		// sequence advancement, renewal stopped — and the active stream is
 		// aborted so it cannot keep consuming under the dead proof.
@@ -641,13 +753,26 @@ const sseMain = async (config) => {
 		if (!lease) return;
 		// A non-positive/unknown delay never schedules: renewal must never
 		// become a zero-delay busy loop.
-		if (!Number.isSafeInteger(lease.renewDelayMs) || lease.renewDelayMs <= 0) return;
+		if (!Number.isSafeInteger(lease.renewDelayMs) || lease.renewDelayMs <= 0) {
+			traceEvent("scheduleRenewal", "renew_timer_refused", { scheduledDelayMs: lease.renewDelayMs });
+			return;
+		}
 		// SERIALIZED renewal: the next timer is armed only AFTER the current
 		// renewal completes (renewLease re-arms from ITS validated response
 		// via the trailing scheduleRenewal below), so two renewals can never
 		// overlap or double-handle the same next sequence.
+		const scheduledSequence = lease.sequence + 1;
+		const scheduledDelayMs = lease.renewDelayMs;
+		const scheduledAt = Date.now();
 		renewalTimer = setTimeout(async () => {
 			renewalTimer = null;
+			// timer-scheduled vs fired (with lateness) keeps server-side
+			// queueing/waiting distinguishable from local timer delay.
+			traceEvent("renewLease", "renew_timer_fired", {
+				sequence: scheduledSequence,
+				scheduledDelayMs,
+				fireLatenessMs: Date.now() - (scheduledAt + scheduledDelayMs),
+			});
 			try {
 				await renewLease();
 			} catch {
@@ -655,7 +780,11 @@ const sseMain = async (config) => {
 				// lease); an unexpected throw must not break the chain.
 			}
 			scheduleRenewal(); // re-arms ONLY while the lease is still held
-		}, lease.renewDelayMs);
+		}, scheduledDelayMs);
+		traceEvent("scheduleRenewal", "renew_timer_scheduled", {
+			sequence: scheduledSequence,
+			scheduledDelayMs,
+		});
 		renewalTimer.unref?.();
 	};
 
@@ -696,6 +825,8 @@ const sseMain = async (config) => {
 	 * the raw body is never echoed or stored.
 	 */
 	const gatedPost = async (urlPath, body, validate) => {
+		const route = TRACE_ROUTES.get(urlPath) ?? "other";
+		traceEvent("gatedPost", "fetch_start", { route });
 		let response;
 		try {
 			response = await fetch(`${config.origin}${urlPath}`, {
@@ -706,11 +837,14 @@ const sseMain = async (config) => {
 				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 			});
 		} catch (err) {
+			traceEvent("gatedPost", "failure", { route, failureClass: "transport_uncertain" });
 			const uncertain = new Error(`transport uncertainty on ${urlPath}`);
 			uncertain.uncertain = true;
 			throw uncertain;
 		}
+		traceEvent("gatedPost", "response_headers", { route, httpStatus: response.status });
 		if (!response.ok) {
+			traceEvent("gatedPost", "failure", { route, httpStatus: response.status, failureClass: "http_refused" });
 			const refused = new Error(`HTTP ${response.status} refused on ${urlPath} (static class)`);
 			refused.httpStatus = response.status;
 			throw refused;
@@ -719,9 +853,18 @@ const sseMain = async (config) => {
 		try {
 			parsed = await response.json();
 		} catch {
+			traceEvent("gatedPost", "failure", { route, failureClass: "gate_refusal" });
 			throw new GateError(urlPath, "$", "response was not parseable JSON", "non-JSON");
 		}
-		return validate(parsed);
+		let validated;
+		try {
+			validated = validate(parsed);
+		} catch (err) {
+			traceEvent("gatedPost", "failure", { route, failureClass: "gate_refusal" });
+			throw err;
+		}
+		traceEvent("gatedPost", "validated_outcome", { route, outcome: validated.outcome });
+		return validated;
 	};
 
 	/**
@@ -808,6 +951,29 @@ const sseMain = async (config) => {
 	 */
 	const ensureOwnership = async () => {
 		if (lease) return lease;
+		// One adoption path for both grant outcomes (recovered identical retry
+		// and fresh claim) so tracing/correlation can never drift apart.
+		const adoptGrant = (grant) => {
+			lease = {
+				runtimeId: grant.runtime_id,
+				epoch: grant.epoch,
+				grantSecret: grant.grant_secret,
+				sequence: 0,
+				renewDelayMs: renewalDelayFor(grant.deadline_remaining_ms),
+			};
+			// PUBLIC correlation only — never the grant secret.
+			traceRuntimeId = grant.runtime_id;
+			traceEpoch = grant.epoch;
+			traceActorId = identity?.actorId ?? traceActorId;
+			traceEvent("ensureOwnership", "ownership_granted", {
+				runtimeId: grant.runtime_id,
+				epoch: grant.epoch,
+				budgetRemainingMs: grant.deadline_remaining_ms,
+				outcome: grant.outcome,
+			});
+			scheduleRenewal();
+			return lease;
+		};
 		let pendingClaimRequest = null;
 		for (let attempt = 1; attempt <= SSE_OWNERSHIP_ATTEMPTS; attempt++) {
 			if (pendingClaimRequest) {
@@ -817,17 +983,8 @@ const sseMain = async (config) => {
 					const grant = await gatedPost(LEASE_CLAIM_PATH, pendingClaimRequest, (parsed) =>
 						validateClaimResponse(parsed, pendingClaimRequest.runtime_id),
 					);
-					const recovered = pendingClaimRequest;
 					pendingClaimRequest = null;
-					lease = {
-						runtimeId: grant.runtime_id,
-						epoch: grant.epoch,
-						grantSecret: grant.grant_secret,
-						sequence: 0,
-						renewDelayMs: renewalDelayFor(grant.deadline_remaining_ms),
-					};
-					scheduleRenewal();
-					return lease;
+					return adoptGrant(grant);
 				} catch (err) {
 					if (err instanceof GateError) {
 						// No authority use from unsafe data.
@@ -861,15 +1018,7 @@ const sseMain = async (config) => {
 					validateClaimResponse(parsed, pendingClaimRequest.runtime_id),
 				);
 				pendingClaimRequest = null;
-				lease = {
-					runtimeId: grant.runtime_id,
-					epoch: grant.epoch,
-					grantSecret: grant.grant_secret,
-					sequence: 0,
-					renewDelayMs: renewalDelayFor(grant.deadline_remaining_ms),
-				};
-				scheduleRenewal();
-				return lease;
+				return adoptGrant(grant);
 			} catch (err) {
 				if (err instanceof GateError) {
 					// No authority use from unsafe data.
@@ -903,7 +1052,7 @@ const sseMain = async (config) => {
 		const next = current.sequence + 1;
 		if (!Number.isSafeInteger(next) || next < 0) {
 			// Fail honestly: silently expiring ownership beats a wrapped sequence.
-			dropLease();
+			dropLease("sequence_overflow");
 			return;
 		}
 		const body = {
@@ -920,14 +1069,24 @@ const sseMain = async (config) => {
 					// Re-arm from the server's fresh remaining budget.
 					current.renewDelayMs = renewalDelayFor(renewed.deadline_remaining_ms);
 				}
+				traceEvent("renewLease", "renew_result", {
+					sequence: next,
+					outcome: renewed.outcome,
+					budgetRemainingMs: renewed.deadline_remaining_ms,
+				});
 				return;
 			} catch (err) {
 				if (err instanceof GateError) {
-					dropLease();
+					dropLease("gate_refusal");
 					return;
 				}
 				if (err.httpStatus === 410 || err.httpStatus === 404 || err.httpStatus === 409) {
-					dropLease();
+					traceEvent("renewLease", "renew_failure", {
+						sequence: next,
+						failureClass: traceFailureClass(err),
+						httpStatus: err.httpStatus,
+					});
+					dropLease("ownership_gone");
 					return;
 				}
 				if (err.uncertain && attempt < SSE_UNCERTAIN_RETRIES) {
@@ -935,7 +1094,12 @@ const sseMain = async (config) => {
 					continue; // SAME sequence on the uncertain retry
 				}
 				// Unconfirmable: stop using the proof and re-acquire honestly.
-				dropLease();
+				traceEvent("renewLease", "renew_failure", {
+					sequence: next,
+					failureClass: traceFailureClass(err),
+					httpStatus: err?.httpStatus,
+				});
+				dropLease("renew_unconfirmable");
 				return;
 			}
 		}
@@ -1118,8 +1282,12 @@ const sseMain = async (config) => {
 	 * One bounded stream connection under the CURRENT proof. The server
 	 * validates ownership before headers; presentation events carry the full
 	 * offer DTO; stream_error is a static class followed by stream end.
-	 * Last-Event-ID is never sent. Any EOF/refusal simply returns — the main
-	 * loop reconnects under valid ownership with bounded backoff.
+	 * Last-Event-ID is never sent. The stream's EXIT is classified and
+	 * returned so the main loop can distinguish REAL recovery (a clean EOF
+	 * with no failure class) from error exits (stream_error, framing
+	 * refusal, ownership-drop abort) — an error exit must NEVER clear the
+	 * failure state as if the stream had recovered. Transport uncertainty
+	 * still throws into the loop's failure path.
 	 */
 	const connectStream = async () => {
 		const current = lease;
@@ -1128,8 +1296,18 @@ const sseMain = async (config) => {
 		streamController = controller;
 		const lifetime = setTimeout(() => controller.abort(), SSE_MAX_CONNECTION_MS);
 		lifetime.unref?.();
+		const openedAt = Date.now();
+		let presentationEvents = 0;
+		const streamEnd = (outcome) => {
+			traceEvent("connectStream", "stream_end", {
+				outcome,
+				durationMs: Date.now() - openedAt,
+				presentationEvents,
+			});
+		};
 		let response;
 		try {
+			traceEvent("connectStream", "stream_fetch_start", {});
 			response = await fetch(`${config.origin}${STREAM_PATH}`, {
 				method: "POST",
 				headers: identityHeaders(),
@@ -1143,20 +1321,28 @@ const sseMain = async (config) => {
 			});
 		} catch {
 			clearTimeout(lifetime);
+			traceEvent("connectStream", "stream_failure", { failureClass: "transport_uncertain" });
 			const uncertain = new Error("transport uncertainty opening the presentation stream");
 			uncertain.uncertain = true;
 			throw uncertain;
 		}
+		traceEvent("connectStream", "stream_headers", { httpStatus: response.status });
 		if (!response.ok) {
 			clearTimeout(lifetime);
+			traceEvent("connectStream", "stream_failure", {
+				failureClass: "http_refused",
+				httpStatus: response.status,
+			});
 			const refused = new Error(`presentation stream refused (HTTP ${response.status}, static class)`);
 			refused.httpStatus = response.status;
 			throw refused;
 		}
 		if (!response.body) {
 			clearTimeout(lifetime);
+			traceEvent("connectStream", "stream_failure", { failureClass: "http_refused" });
 			throw new Error("presentation stream returned no body (static class)");
 		}
+		traceEvent("connectStream", "stream_open", {});
 		const parser = createSseParser({ maxEventBytes: SSE_MAX_EVENT_BYTES, maxLineBytes: SSE_MAX_LINE_BYTES });
 		const decoder = new TextDecoder();
 		try {
@@ -1164,27 +1350,47 @@ const sseMain = async (config) => {
 				const events = parser.feed(decoder.decode(chunk, { stream: true }));
 				for (const event of events) {
 					if (event.event === "presentation") {
+						presentationEvents += 1;
+						if (presentationEvents === 1) traceEvent("connectStream", "first_presentation", {});
 						handlePresentationEvent(event.data);
 					} else if (event.event === "stream_error") {
 						// Static failure class, stream ends. The reconnect path
 						// re-verifies ownership honestly (status → claim, never
 						// takeover); if the proof is dead it is dropped there.
+						// This is an ERROR EXIT: the loop must NOT treat it as
+						// recovery, so the identical class stays quiet instead of
+						// waking the model once per reconnect.
 						emitOncePerClass("stream_error received — the stream is ending");
-						return;
+						streamEnd("stream_error_event");
+						return "stream_error";
 					}
 					// Unknown event types are ignored (bounded, no effect).
 				}
 			}
 			const tail = parser.end();
-			if (tail.refused) emitOncePerClass("stream ended mid-frame — the partial event is refused");
+			if (tail.refused) {
+				emitOncePerClass("stream ended mid-frame — the partial event is refused");
+				streamEnd("frame_refused");
+				return "frame_refused";
+			}
+			// REAL recovery: a stream that reached a clean EOF with no failure
+			// class — the only stream exit that re-arms the loop's
+			// changed-failure rule.
+			streamEnd("clean_eof");
+			return "clean_end";
 		} catch (err) {
 			if (err instanceof SseFrameError) {
 				emitOncePerClass("oversized SSE frame refused — reconnecting");
+				streamEnd("frame_refused");
+				return "frame_refused";
 			} else if (controller.ownershipDropped) {
 				// Ownership was dropped while this stream was active: the abort
 				// is LOCAL and deliberate, not transport uncertainty.
 				emitOncePerClass("ownership dropped — the active stream was aborted (static class)");
+				streamEnd("ownership_dropped");
+				return "ownership_dropped";
 			} else {
+				traceEvent("connectStream", "stream_failure", { failureClass: "transport_uncertain" });
 				const uncertain = new Error("transport uncertainty reading the presentation stream");
 				uncertain.uncertain = true;
 				throw uncertain;
@@ -1202,19 +1408,34 @@ const sseMain = async (config) => {
 				// First resolution — the credential alone speaks; the result is
 				// frozen for the worker lifetime.
 				identity = await resolveIdentity();
+				traceActorId = identity.actorId;
+				traceEvent("sseMain", "identity_resolved", {});
 			} else {
 				// Re-verify the frozen identity before each reconnect.
 				await verifyIdentity();
 			}
 			await ensureOwnership();
-			await connectStream();
-			lastFailureClass = null; // recovery clears the quiet-until-changed rule
-			consecutiveFailures = 0;
+			const streamOutcome = await connectStream();
+			if (streamOutcome === "clean_end") {
+				// REAL recovery ONLY: a stream that ended with a clean EOF and
+				// no failure class re-arms the changed-failure rule. An error
+				// exit (stream_error, framing refusal, ownership-drop abort)
+				// must never masquerade as successful recovery — repeated
+				// identical errors stay quiet instead of waking the model once
+				// per reconnect, while a CHANGED failure still wakes.
+				lastFailureClass = null;
+				consecutiveFailures = 0;
+				traceEvent("sseMain", "loop_recovery", {});
+			}
 			await sleep(reconnectBackoff);
 		} catch (err) {
+			traceEvent("sseMain", "loop_failure", {
+				failureClass: traceFailureClass(err),
+				httpStatus: err?.httpStatus,
+			});
 			emitOncePerClass(`${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
-			if (err instanceof GateError) dropLease(); // no further authority use from that response
-			if (err?.httpStatus === 404 || err?.httpStatus === 410) dropLease(); // stop using lost ownership
+			if (err instanceof GateError) dropLease("gate_refusal"); // no further authority use from that response
+			if (err?.httpStatus === 404 || err?.httpStatus === 410) dropLease("ownership_gone"); // stop using lost ownership
 			// Exponential, capped reconnect backoff: bounded rate, honest
 			// steady-state retry, never legacy consumption.
 			consecutiveFailures = Math.min(consecutiveFailures + 1, 8);

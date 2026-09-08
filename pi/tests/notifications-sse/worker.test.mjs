@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import crypto from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -111,6 +111,8 @@ function startWorker(port, extraEnv = {}) {
 			AUTONOMY_SSE_EXPECTED_ACTOR_ID: "",
 			AUTONOMY_SSE_SCOPE: "",
 			AUTONOMY_SSE_RENEW_INTERVAL_MS: "",
+			// Opt-in diagnostics stay off unless a test explicitly enables them.
+			AUTONOMY_SSE_TRACE_FILE: "",
 			// Minimal default-SSE setup: trusted origin + credential only.
 			// Identity (ActorId + handle), scope and renewal derive at runtime.
 			AUTONOMY_BASE: `http://127.0.0.1:${port}`,
@@ -694,4 +696,192 @@ test("SSE worker: missing credentials is a visible prerequisite failure and neve
 	// Nothing at all was consumed: no SSE lease/stream activity AND no
 	// legacy /notifications?timeout= long-poll.
 	assert.equal(fake.requests.length, 0, "no consumption of any kind after a config refusal");
+});
+
+// ── error-exit amplification (t277): stream exits are classified, and ────
+// only a REAL recovery (clean EOF, no failure class) re-arms the
+// changed-failure rule. An error exit must never masquerade as recovery.
+
+test("SSE worker: repeated stream_error wakes once, a changed failure wakes, only a clean end re-arms, delivery survives", async (t) => {
+	let phase = "error"; // error → stream_error | frame → mid-frame refusal | clean → clean EOF + offer
+	const fake = makeFakeServer({
+		onStream: (req, res) => {
+			if (phase === "error") {
+				res.write("event: stream_error\ndata: lease lost\n\n");
+				res.end();
+			} else if (phase === "frame") {
+				res.write("event: presentation\ndata: {partial");
+				res.end();
+			} else {
+				presentationEvent(res, { ...OFFER, presentation_id: 11, digest: sha256Hex(OFFER.body) });
+				res.end();
+			}
+		},
+	});
+	const port = await listen(fake.server);
+	const w = startWorker(port);
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+	const waitForStreams = async (count, label) => {
+		const start = Date.now();
+		while (fake.streamCount() < count) {
+			if (Date.now() - start > 8000) throw new Error(`timed out waiting for ${label}`);
+			await sleep(25);
+		}
+	};
+	const wakes = () => w.lines.filter((l) => l.includes('"kind":"wake"'));
+
+	// Phase 1: the SAME stream_error class on every reconnect stays ONE wake
+	// while the stream is reopened repeatedly (no wake per reconnect).
+	await w.waitFor((l) => l.includes("stream_error received"), "first stream_error wake");
+	await waitForStreams(3, "three stream_error reconnects");
+	await sleep(250); // further identical reconnects stay quiet
+	assert.equal(wakes().length, 1, `repeated identical stream_error must not wake per reconnect (got ${wakes().length})`);
+
+	// Phase 2: a CHANGED failure (mid-frame refusal) is still visible.
+	phase = "frame";
+	await w.waitFor((l) => l.includes("stream ended mid-frame"), "changed failure wake");
+	assert.equal(wakes().length, 2, "the changed failure wakes exactly once");
+
+	// Phase 3: a clean stream end (no failure class) is REAL recovery — and
+	// a new presentation is still delivered through it.
+	phase = "clean";
+	await w.waitFor(
+		(l) => l.includes('"kind":"deliver"') && JSON.parse(l).message.details.presentationId === 11,
+		"deliver after recovery",
+	);
+	await sleep(250);
+	assert.equal(wakes().length, 2, "recovery + delivery add no wake");
+
+	// Phase 4: after real recovery, the same stream_error class wakes again
+	// (the quiet-until-changed rule was genuinely re-armed, not stuck).
+	phase = "error";
+	await w.waitFor(
+		() => wakes().filter((l) => l.includes("stream_error received")).length >= 2,
+		"stream_error wakes again after recovery",
+		8000,
+	);
+});
+
+// ── opt-in bounded phase trace (t277 diagnostics) ────────────────────────
+
+const TRACE_ALLOWED_FIELDS = new Set([
+	"t", "phase", "event", "pid", "runtimeId", "epoch", "actorId", "route", "httpStatus",
+	"outcome", "failureClass", "sequence", "budgetRemainingMs", "scheduledDelayMs",
+	"fireLatenessMs", "durationMs", "presentationEvents", "reason",
+]);
+
+test("SSE worker: opt-in phase tracing is bounded, safe-field-only, restricted, and covers the phases", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "sse-worker-trace-"));
+	const traceFile = join(dir, "trace.jsonl");
+	let streamRes = null;
+	const fake = makeFakeServer({
+		claimDeadlineMs: 900, // derived renewal delay ~300ms: at least one timer fires
+		onStream: (req, res) => {
+			streamRes = res;
+			presentationEvent(res, OFFER);
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port, { AUTONOMY_SSE_TRACE_FILE: traceFile });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	const sessionFile = writeSessionFile(OFFER.body, 7, origin);
+	w.send({ event: "session", sessionId: "sess-1", sessionFile });
+	w.send({ event: "reconcile" });
+	await w.waitFor((l) => l.includes('"kind":"ack"'), "ack outcome");
+	await sleep(700); // let a renewal timer fire
+	streamRes?.end(); // clean EOF → classified stream_end, then reconnect
+
+	const exited = new Promise((r) => w.child.on("exit", r));
+	w.child.kill("SIGTERM");
+	await exited;
+
+	const raw = readFileSync(traceFile, "utf8");
+	const records = raw
+		.trim()
+		.split("\n")
+		.map((l) => JSON.parse(l));
+	assert.ok(records.length > 0 && records.length <= 2000, "bounded record count");
+	const stat = statSync(traceFile);
+	assert.equal(stat.mode & 0o777, 0o600, "restrictive file permissions");
+	assert.ok(stat.size <= 1_000_000, "bounded file size");
+	for (const record of records) {
+		for (const key of Object.keys(record)) {
+			assert.ok(TRACE_ALLOWED_FIELDS.has(key), `trace record carries only safe fields (saw ${key})`);
+		}
+		assert.equal(typeof record.t, "number", "monotonic elapsed time");
+		assert.ok(!Number.isNaN(record.t));
+	}
+	// No credential material of any kind ever appears.
+	assert.ok(!raw.includes("ab".repeat(32)), "no grant secret in the trace");
+	assert.ok(!raw.includes("test-only-token"), "no bearer credential in the trace");
+
+	const events = new Set(records.map((r) => r.event));
+	for (const expected of [
+		"identity_resolved",
+		"ownership_granted",
+		"renew_timer_scheduled",
+		"renew_timer_fired",
+		"fetch_start",
+		"response_headers",
+		"validated_outcome",
+		"stream_fetch_start",
+		"stream_headers",
+		"stream_open",
+		"first_presentation",
+		"stream_end",
+	]) {
+		assert.ok(events.has(expected), `trace covers ${expected}`);
+	}
+	const fired = records.find((r) => r.event === "renew_timer_fired");
+	assert.equal(fired.sequence, 1, "the fired renewal carries its sequence");
+	assert.equal(typeof fired.fireLatenessMs, "number", "timer-scheduled vs fired is distinguishable");
+	assert.ok(
+		records.some((r) => r.event === "stream_end" && r.outcome === "clean_eof"),
+		"the clean EOF is classified as real recovery",
+	);
+});
+
+test("SSE worker: tracing is disabled by default — no trace file is created without the explicit setting", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "sse-worker-notrace-"));
+	const traceFile = join(dir, "trace.jsonl");
+	const fake = makeFakeServer({ onStream: (req, res) => presentationEvent(res, OFFER) });
+	const port = await listen(fake.server);
+	const w = startWorker(port, { AUTONOMY_SSE_TRACE_FILE: "" }); // empty = unset
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	await sleep(200);
+	assert.ok(!existsSync(traceFile), "no trace file is written when the setting is not configured");
+});
+
+test("SSE worker: an unusable trace path disables tracing without affecting ownership or delivery", async (t) => {
+	const fake = makeFakeServer({ onStream: (req, res) => presentationEvent(res, OFFER) });
+	const port = await listen(fake.server);
+	const w = startWorker(port, { AUTONOMY_SSE_TRACE_FILE: "/nonexistent-t277-trace-dir/trace.jsonl" });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	// Tracing fails to open, and ownership + delivery are entirely unaffected.
+	const deliverLine = await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	assert.equal(JSON.parse(deliverLine).message.details.presentationId, 7);
+	await sleep(150);
+	assert.equal(w.child.exitCode, null, "the worker keeps running normally");
 });
