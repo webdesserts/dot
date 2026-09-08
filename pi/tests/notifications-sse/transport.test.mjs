@@ -331,7 +331,7 @@ test("stream/control separation: a held SSE stream runs on a dedicated HTTP/1.1 
 				setTimeout(() => {
 					presentationEvent(res, OFFER_A);
 					res.end();
-				}, 2600);
+				}, 3 * budgetMs + 200);
 			} else {
 				// A new arrival on a later connection.
 				openSse(res);
@@ -380,6 +380,10 @@ test("stream/control separation: a held SSE stream runs on a dedicated HTTP/1.1 
 	// have been refused 410 — zero denials is the whole point.
 	const stream1 = fixture.streamConns[0];
 	assert.ok(stream1, "one stream connection was made");
+	assert.ok(
+		stream1.closedAt - stream1.openedAt >= 3 * budgetMs,
+		"the held stream spans at least three elapsed lease budgets",
+	);
 	const renewalsDuringHold = fixture.requests.filter(
 		(r) => r.url === "/notifications/lease/renew" && r.at >= stream1.openedAt && r.at <= stream1.closedAt,
 	);
