@@ -29,7 +29,7 @@ See `~/.config/opencode/orchestrator.md` for the full orchestrator prompt.
 - Use `Search` to find relevant notes, then `ReadNote` to view content
 - Trust note content over training data when they conflict
 
-**Session Log:** The log tracks chronological session activity. Use the `Log` tool to append entries (timestamps added automatically).
+**Work continuity:** Keep task state on the work board and open context in the agent's Working Memory. The shared Log is retired; read its linked archives deliberately when historical evidence is needed, and do not append new activity to it.
 
 ---
 
