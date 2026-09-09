@@ -28,7 +28,6 @@ replaced the old per-machine `~/CLAUDE.md`.
 
 ## Obsidian Memory
 
-@~/notes/Log.md
 
 @~/.dots/webdesserts-private/obsidian-memory/notetaking.md
 
