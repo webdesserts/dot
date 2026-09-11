@@ -544,7 +544,8 @@ const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 // Record fields (the complete allowed set):
 //   t                  monotonic elapsed ms since worker start
 //   phase              sseMain | ensureOwnership | scheduleRenewal |
-//                      renewLease | gatedPost | connectStream | dropLease
+//                      renewLease | gatedPost | connectStream | dropLease |
+//                      reconcile
 //   event              phase-specific enum (see traceEvent call sites)
 //   pid                process correlation
 //   runtimeId/epoch/actorId  PUBLIC grant/identity correlation (never the
