@@ -40,7 +40,7 @@ const SCOPE = "test-backend-scope";
  * `claimDeadlineMs` let a test script the identity response and the
  * server's lease budget.
  */
-function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone = false, claimConflictAfter = null } = {}) {
+function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone = false, claimConflictAfter = null, ackBehavior = null } = {}) {
 	const requests = [];
 	let streamConnections = 0;
 	let claims = 0;
@@ -88,6 +88,12 @@ function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone 
 				else res.end();
 			} else if (req.url === "/notifications/presentation/acknowledge") {
 				acks.push(JSON.parse(raw));
+				if (ackBehavior && ackBehavior() === "destroy") {
+					// Transport outage: the connection dies before a response — the
+					// exact uncertainty the identical-request retry exists for.
+					req.socket.destroy();
+					return;
+				}
 				respond(200, { outcome: "acknowledged" });
 			} else {
 				respond(404, { error: "unexpected endpoint" });
@@ -884,4 +890,156 @@ test("SSE worker: an unusable trace path disables tracing without affecting owne
 	assert.equal(JSON.parse(deliverLine).message.details.presentationId, 7);
 	await sleep(150);
 	assert.equal(w.child.exitCode, null, "the worker keeps running normally");
+});
+
+// ── acknowledgement-outage spam bounds ───────────────────────────────────
+// One transport outage must cost ONE static ack warning (no per-receipt
+// ids), one attempted receipt per pass, and background-only retries —
+// never a per-receipt warning for the whole batch, and never a
+// whole-batch walk per agent_settled/replay event (the live 291-receipt
+// failure mode).
+
+const ACK_SPAM_BACKOFF_MS = "800"; // background ack retry base; also the reconnect base here
+
+const writeMultiReceiptSessionFile = (specs, scope) => {
+	const dir = mkdtempSync(join(tmpdir(), "sse-worker-ackspam-"));
+	const file = join(dir, "session.jsonl");
+	const lines = [JSON.stringify({ type: "session", id: "sess-1", version: 1 })];
+	for (const spec of specs) {
+		const details = {
+			schema: METADATA_SCHEMA_VERSION,
+			scope,
+			recipient: ACTOR,
+			actorId: EXPECTED_ACTOR_ID,
+			sessionId: "sess-1",
+			presentationId: spec.presentationId,
+			renderVersion: 1,
+			digest: sha256Hex(spec.body),
+			contentOfferId: null,
+			summaryOfferId: null,
+		};
+		lines.push(
+			JSON.stringify({
+				type: "custom_message",
+				id: `m-${spec.presentationId}`,
+				customType: CUSTOM_TYPE,
+				content: spec.body,
+				display: true,
+				details,
+			}),
+		);
+	}
+	writeFileSync(file, lines.join("\n") + "\n");
+	return file;
+};
+
+test("SSE worker: one ack outage warns once, stops at the first receipt, retries in the background, recovers idempotently, and re-arms", async (t) => {
+	let ackBehavior = () => "destroy"; // transport outage until flipped
+	const fake = makeFakeServer({
+		ackBehavior: () => ackBehavior(),
+		onStream: (req, res) => {
+			presentationEvent(res, OFFER); // stays open: identity + ownership only
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port, { AUTONOMY_SSE_RECONNECT_BACKOFF_MS: ACK_SPAM_BACKOFF_MS });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	const specs = [101, 102, 103].map((id) => ({ presentationId: id, body: `receipt body ${id}` }));
+	const sessionFile = writeMultiReceiptSessionFile(specs, origin);
+	w.send({ event: "session", sessionId: "sess-1", sessionFile });
+	w.send({ event: "reconcile" });
+
+	const ackWakes = () => w.lines.filter((l) => l.includes('"kind":"wake"') && l.includes("ack retries exhausted"));
+	const ackReqs = () => fake.requests.filter((r) => r.url === "/notifications/presentation/acknowledge");
+
+	// First failing pass: bounded identical retries of the FIRST receipt only.
+	await w.waitFor((l) => l.includes("ack retries exhausted"), "first ack outage warning", 8000);
+	const firstWarningAt = Date.now();
+	await sleep(150); // let any same-pass stragglers land
+	assert.equal(ackWakes().length, 1, "the WHOLE batch must produce exactly ONE warning");
+	assert.ok(!/\b10[123]\b/.test(ackWakes()[0]), `the warning is static, no per-receipt id: ${ackWakes()[0]}`);
+	assert.equal(ackReqs().length, 3, "only the first receipt is attempted: its 3 bounded identical retries");
+	for (const r of ackReqs()) {
+		assert.equal(
+			r.body,
+			JSON.stringify({ presentation_id: 101, expected_digest: sha256Hex("receipt body 101") }),
+			"identical requests for the first receipt only",
+		);
+	}
+
+	// Reconcile events during the backoff add NO requests and NO warnings.
+	const before = ackReqs().length;
+	for (let i = 0; i < 4; i++) w.send({ event: "reconcile" });
+	await sleep(300); // well within the 800ms background bound
+	assert.equal(ackReqs().length, before, "reconcile events during the backoff never reach the daemon");
+	assert.equal(ackWakes().length, 1, "and they never warn");
+
+	// Real recovery: the background pass (after the bound) acknowledges ALL
+	// qualifying receipts idempotently.
+	ackBehavior = () => "ok";
+	await w.waitFor(
+		(l) => l.includes('"kind":"ack"') && l.includes('"outcome":"acknowledged"') && l.includes("103"),
+		"all receipts acknowledged by the background pass",
+		10000,
+	);
+	assert.ok(Date.now() - firstWarningAt >= 700, "the background retry waits out the backoff bound");
+	assert.deepEqual(
+		fake.acks.slice(-3).map((a) => a.presentation_id),
+		[101, 102, 103],
+		"recovery processes every qualifying receipt",
+	);
+	for (const a of fake.acks.slice(-3)) {
+		const spec = specs.find((s) => s.presentationId === a.presentation_id);
+		assert.deepEqual(a, { presentation_id: spec.presentationId, expected_digest: sha256Hex(spec.body) });
+	}
+	assert.equal(ackWakes().length, 1, "recovery adds no warnings");
+
+	// A NEW outage after real recovery warns once again (the ack warning
+	// re-armed on recovery).
+	ackBehavior = () => "destroy";
+	w.send({ event: "reconcile" });
+	await w.waitFor(() => ackWakes().length >= 2, "second outage warns again", 10000);
+	assert.equal(ackWakes().length, 2, "a fresh outage after recovery warns exactly once more");
+	assert.ok(!/\b10[123]\b/.test(ackWakes()[1]), "and it is static again");
+});
+
+test("SSE worker: stream and acknowledgement failure suppression are independent domains", async (t) => {
+	const fake = makeFakeServer({
+		ackBehavior: () => "destroy",
+		onStream: (req, res) => {
+			res.write("event: stream_error\ndata: lease lost\n\n");
+			res.end(); // EVERY connection fails identically
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port, { AUTONOMY_SSE_RECONNECT_BACKOFF_MS: ACK_SPAM_BACKOFF_MS });
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes("stream_error received"), "stream failure wake");
+	const specs = [201, 202].map((id) => ({ presentationId: id, body: `receipt body ${id}` }));
+	w.send({ event: "session", sessionId: "sess-1", sessionFile: writeMultiReceiptSessionFile(specs, origin) });
+	w.send({ event: "reconcile" });
+	await w.waitFor((l) => l.includes("ack retries exhausted"), "first ack warning", 10000);
+
+	// Several failing ack passes and stream reconnects later, both domains
+	// must still have warned EXACTLY once — neither resets the other.
+	await sleep(3200);
+	const streamWakes = w.lines.filter((l) => l.includes('"kind":"wake"') && l.includes("stream_error received"));
+	const ackWakes = w.lines.filter((l) => l.includes('"kind":"wake"') && l.includes("ack retries exhausted"));
+	assert.ok(fake.streamCount() >= 3, "the stream actually reconnected repeatedly");
+	assert.equal(streamWakes.length, 1, "repeated identical stream failures stay quiet");
+	assert.equal(ackWakes.length, 1, "repeated ack passes on the same outage stay quiet");
+	for (const line of ackWakes) assert.ok(!/\b20[12]\b/.test(line), `no per-receipt id in the ack warning: ${line}`);
 });

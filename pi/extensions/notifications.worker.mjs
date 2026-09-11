@@ -716,7 +716,6 @@ const sseMain = async (config) => {
 	let lease = null; // {runtimeId, epoch, grantSecret, sequence, renewDelayMs} — process memory only
 	let identity = null; // {actorId, actor} — FROZEN for the worker lifetime once validated
 	let renewalTimer = null;
-	let lastFailureClass = null;
 	let consecutiveFailures = 0;
 	const reconnectBackoff = clampNumber(
 		Number(process.env.AUTONOMY_SSE_RECONNECT_BACKOFF_MS ?? 5_000) || 5_000,
@@ -1105,9 +1104,15 @@ const sseMain = async (config) => {
 		}
 	};
 
-	const emitOncePerClass = (failureClass) => {
-		if (failureClass === lastFailureClass) return;
-		lastFailureClass = failureClass;
+	// Failure suppression is isolated BY DOMAIN (stream consumption vs disk-
+	// receipt acknowledgement): one subsystem's changed class must never
+	// re-arm another subsystem's identical warning. Stream-domain classes
+	// re-arm only on a REAL recovery (clean EOF); the ack domain re-arms
+	// when a reconciliation pass settles without an uncertain outage.
+	const lastFailureClass = { stream: null, ack: null };
+	const emitOncePerClass = (domain, failureClass) => {
+		if (failureClass === lastFailureClass[domain]) return;
+		lastFailureClass[domain] = failureClass;
 		emit("wake", `[notifications.sse] ${failureClass}`);
 	};
 
@@ -1123,14 +1128,14 @@ const sseMain = async (config) => {
 
 	// Serialize receipt reconciliation so two reconciles never double-ack.
 	let ackQueue = Promise.resolve();
-	queueReconcile = () => {
-		ackQueue = ackQueue.then(reconcileNow).catch(() => {});
-	};
 
 	/**
 	 * Acknowledge ONLY qualifying disk-recorded custom-message bytes read
 	 * against the bound session, explicit scope and recipient. Send returns,
-	 * socket delivery and in-memory state never authorize an ack.
+	 * socket delivery and in-memory state never authorize an ack. Returns
+	 * "uncertain" when the transport outage exhausted a receipt's bounded
+	 * identical retries — the caller stops the WHOLE batch against the same
+	 * outage instead of walking every later receipt into the same failure.
 	 */
 	const reconcileNow = async () => {
 		if (!sseSessionFile || !sseSessionId) return;
@@ -1143,7 +1148,12 @@ const sseMain = async (config) => {
 				identity.actorId,
 			);
 		if (!read.ok) {
-			emitOncePerClass(`disk receipts unreadable (${read.reason}) — nothing acknowledged`);
+			emitOncePerClass("ack", `disk receipts unreadable (${read.reason}) — nothing acknowledged`);
+			// Liveness: an unreadable disk is not an outage the background
+			// retry can fix — settle the outage state so external reconcile
+			// events flow again (the warning class itself stays armed).
+			ackOutage = false;
+			ackRetryAttempt = 0;
 			return;
 		}
 		for (const receipt of read.receipts) {
@@ -1153,8 +1163,23 @@ const sseMain = async (config) => {
 				emit("ack", { presentationId: receipt.presentationId, outcome: "refused" });
 				continue;
 			}
-			await acknowledgeReceipt(receipt, 1);
+			const outcome = await acknowledgeReceipt(receipt, 1);
+			if (outcome === "uncertain") {
+				// One uncertain exhaustion is evidence of a transport outage:
+				// stop THIS batch immediately (later receipts would only repeat
+				// the identical failure) and let the background backoff own the
+				// next pass.
+				ackOutage = true;
+				scheduleAckRetry();
+				return;
+			}
 		}
+		// A settled pass (no uncertain exhaustion) is real acknowledgement
+		// recovery: re-arm the ack warning for a future NEW outage and reset
+		// the backoff ladder.
+		ackOutage = false;
+		ackRetryAttempt = 0;
+		lastFailureClass.ack = null;
 	};
 
 	const acknowledgeReceipt = async (receipt, attempt) => {
@@ -1165,10 +1190,11 @@ const sseMain = async (config) => {
 				validateAckResponse,
 			);
 			emit("ack", { presentationId: receipt.presentationId, outcome: response.outcome });
+			return "acknowledged";
 		} catch (err) {
 			if (err instanceof GateError || err.httpStatus === 403 || err.httpStatus === 404 || err.httpStatus === 409) {
 				emit("ack", { presentationId: receipt.presentationId, outcome: "refused" });
-				return;
+				return "refused";
 			}
 			// Uncertain: bounded retry of the EXACT qualifying receipt after
 			// re-reading the disk bytes — never a resend of the body.
@@ -1187,13 +1213,48 @@ const sseMain = async (config) => {
 						(r) => !r.refused && r.presentationId === receipt.presentationId && r.digest === receipt.digest,
 					);
 				if (!stillThere) {
-					emitOncePerClass("ack retry aborted: qualifying disk bytes no longer present");
-					return;
+					emitOncePerClass("ack", "ack retry aborted: qualifying disk bytes no longer present");
+					return "refused";
 				}
 				return acknowledgeReceipt(receipt, attempt + 1);
 			}
-			emitOncePerClass(`ack retries exhausted (uncertain) for presentation ${receipt.presentationId}`);
+			// ONE static, per-outage warning — never a per-receipt id (a whole
+			// batch of receipts must not become a warning each). The batch has
+			// already stopped; the queue retries in the background below.
+			emitOncePerClass("ack", "ack retries exhausted (uncertain) — the batch stops and retries in the background");
+			return "uncertain";
 		}
+	};
+
+	// ── ack-outage background retry: ONE timer, bounded exponential backoff ──
+	// After an uncertain exhaustion the queue retries the reconciliation in
+	// the background; agent_settled/replay events arriving during that
+	// backoff add NOTHING (no duplicate passes, no extra requests) because
+	// the scheduled pass is the only next pass. Repeated exhaustions climb
+	// the bounded ladder; a settled pass resets it.
+	let ackOutage = false;
+	let ackRetryAttempt = 0;
+	let ackRetryTimer = null;
+
+	const enqueueAckPass = () => {
+		ackQueue = ackQueue.then(reconcileNow).catch(() => {});
+	};
+
+	queueReconcile = () => {
+		if (ackOutage) return; // the scheduled background pass owns the next attempt
+		enqueueAckPass();
+	};
+
+	const scheduleAckRetry = () => {
+		if (ackRetryTimer) return; // single timer: repeated exhaustion never stacks passes
+		ackRetryAttempt = Math.min(ackRetryAttempt + 1, 8);
+		const delay = clampNumber(reconnectBackoff * 2 ** (ackRetryAttempt - 1), 50, 60_000);
+		traceEvent("reconcile", "ack_retry_scheduled", { scheduledDelayMs: delay });
+		ackRetryTimer = setTimeout(() => {
+			ackRetryTimer = null;
+			enqueueAckPass();
+		}, delay);
+		ackRetryTimer.unref?.();
 	};
 
 	/** One validated presentation event → supervisor delivery request. */
@@ -1202,7 +1263,7 @@ const sseMain = async (config) => {
 		try {
 			parsed = JSON.parse(data);
 		} catch {
-			emitOncePerClass("malformed presentation frame refused (non-JSON) — no delivery");
+			emitOncePerClass("stream", "malformed presentation frame refused (non-JSON) — no delivery");
 			return;
 		}
 		let offer;
@@ -1213,16 +1274,17 @@ const sseMain = async (config) => {
 			offer = validatePresentationOffer(parsed);
 		} catch (err) {
 			emitOncePerClass(
+				"stream",
 				`presentation offer refused by the validation gate (${err?.field ?? "unknown field"}) — no delivery`,
 			);
 			return;
 		}
 		if (offer.render_version !== SUPPORTED_RENDER_VERSION) {
-			emitOncePerClass("unsupported render version refused — no delivery");
+			emitOncePerClass("stream", "unsupported render version refused — no delivery");
 			return;
 		}
 		if (!verifyOfferDigest(offer)) {
-			emitOncePerClass("presentation body hash mismatch refused — no delivery");
+			emitOncePerClass("stream", "presentation body hash mismatch refused — no delivery");
 			return;
 		}
 		// Recorded-receipt replay guard: a fully qualifying disk receipt with
@@ -1375,7 +1437,7 @@ const sseMain = async (config) => {
 						// This is an ERROR EXIT: the loop must NOT treat it as
 						// recovery, so the identical class stays quiet instead of
 						// waking the model once per reconnect.
-						emitOncePerClass("stream_error received — the stream is ending");
+						emitOncePerClass("stream", "stream_error received — the stream is ending");
 						streamEnd("stream_error_event");
 						return "stream_error";
 					}
@@ -1384,7 +1446,7 @@ const sseMain = async (config) => {
 			}
 			const tail = parser.end();
 			if (tail.refused) {
-				emitOncePerClass("stream ended mid-frame — the partial event is refused");
+				emitOncePerClass("stream", "stream ended mid-frame — the partial event is refused");
 				streamEnd("frame_refused");
 				return "frame_refused";
 			}
@@ -1395,13 +1457,13 @@ const sseMain = async (config) => {
 			return "clean_end";
 		} catch (err) {
 			if (err instanceof SseFrameError) {
-				emitOncePerClass("oversized SSE frame refused — reconnecting");
+				emitOncePerClass("stream", "oversized SSE frame refused — reconnecting");
 				streamEnd("frame_refused");
 				return "frame_refused";
 			} else if (controller.ownershipDropped) {
 				// Ownership was dropped while this stream was active: the abort
 				// is LOCAL and deliberate, not transport uncertainty.
-				emitOncePerClass("ownership dropped — the active stream was aborted (static class)");
+				emitOncePerClass("stream", "ownership dropped — the active stream was aborted (static class)");
 				streamEnd("ownership_dropped");
 				return "ownership_dropped";
 			} else {
@@ -1433,12 +1495,14 @@ const sseMain = async (config) => {
 			const streamOutcome = await connectStream();
 			if (streamOutcome === "clean_end") {
 				// REAL recovery ONLY: a stream that ended with a clean EOF and
-				// no failure class re-arms the changed-failure rule. An error
-				// exit (stream_error, framing refusal, ownership-drop abort)
-				// must never masquerade as successful recovery — repeated
-				// identical errors stay quiet instead of waking the model once
-				// per reconnect, while a CHANGED failure still wakes.
-				lastFailureClass = null;
+				// no failure class re-arms the STREAM domain's changed-failure
+				// rule. An error exit (stream_error, framing refusal,
+				// ownership-drop abort) must never masquerade as successful
+				// recovery — repeated identical errors stay quiet instead of
+				// waking the model once per reconnect, while a CHANGED failure
+				// still wakes. The acknowledgement domain re-arms on its own
+				// recovery (a settled reconciliation pass) — never here.
+				lastFailureClass.stream = null;
 				consecutiveFailures = 0;
 				traceEvent("sseMain", "loop_recovery", {});
 			}
@@ -1448,7 +1512,7 @@ const sseMain = async (config) => {
 				failureClass: traceFailureClass(err),
 				httpStatus: err?.httpStatus,
 			});
-			emitOncePerClass(`${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
+			emitOncePerClass("stream", `${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
 			if (err instanceof GateError) dropLease("gate_refusal"); // no further authority use from that response
 			if (err?.httpStatus === 404 || err?.httpStatus === 410) dropLease("ownership_gone"); // stop using lost ownership
 			// Exponential, capped reconnect backoff: bounded rate, honest
