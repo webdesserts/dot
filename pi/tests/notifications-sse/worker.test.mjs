@@ -88,11 +88,21 @@ function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone 
 				else res.end();
 			} else if (req.url === "/notifications/presentation/acknowledge") {
 				acks.push(JSON.parse(raw));
-				if (ackBehavior && ackBehavior() === "destroy") {
-					// Transport outage: the connection dies before a response — the
-					// exact uncertainty the identical-request retry exists for.
-					req.socket.destroy();
-					return;
+				if (ackBehavior) {
+					const behavior = ackBehavior();
+					if (behavior === "destroy") {
+						// Transport outage: the connection dies before a response — the
+						// exact uncertainty the identical-request retry exists for.
+						req.socket.destroy();
+						return;
+					}
+					if (behavior === "hang") {
+						// The 2026-09-11 edge-incident shape: TCP accepted, then NO
+						// headers and NO bytes — the caller's own per-attempt fetch
+						// timeout is what classifies the uncertainty here. Never
+						// respond; the worker's AbortSignal must fire.
+						return;
+					}
 				}
 				respond(200, { outcome: "acknowledged" });
 			} else {
@@ -1042,4 +1052,80 @@ test("SSE worker: stream and acknowledgement failure suppression are independent
 	assert.equal(streamWakes.length, 1, "repeated identical stream failures stay quiet");
 	assert.equal(ackWakes.length, 1, "repeated ack passes on the same outage stay quiet");
 	for (const line of ackWakes) assert.ok(!/\b20[12]\b/.test(line), `no per-receipt id in the ack warning: ${line}`);
+});
+
+// ── the 2026-09-11 edge-incident shape (receipt: iris-autonomy-edge-recovery) ──
+// The edge ACCEPTED TCP but returned no headers/bytes at all (HTTP 000 at the
+// caller timeout): the worker's own per-attempt fetch timeout is what classifies
+// the uncertainty. Repeated agent_settled/reconcile triggers against that
+// black hole must coalesce — one static warning, first-receipt-only passes, no
+// chained hung passes, and background recovery when bytes flow again.
+
+test("SSE worker: an edge that accepts TCP but never sends headers costs one static warning, coalesces repeated settles, and recovers in the background", async (t) => {
+	let ackBehavior = () => "hang"; // accepted + silence until the worker's timeout aborts it
+	const fake = makeFakeServer({
+		ackBehavior: () => ackBehavior(),
+		onStream: (req, res) => {
+			presentationEvent(res, OFFER); // stays open: identity + ownership only
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const w = startWorker(port, {
+		AUTONOMY_SSE_RECONNECT_BACKOFF_MS: ACK_SPAM_BACKOFF_MS,
+		AUTONOMY_FETCH_TIMEOUT_MS: "250", // test-only: the per-attempt caller timeout from the incident
+	});
+	t.after(() => {
+		w.child.kill();
+		fake.server.close();
+		fake.server.closeAllConnections?.();
+	});
+
+	await w.waitFor((l) => l.includes('"kind":"deliver"'), "deliver");
+	const specs = [301, 302, 303].map((id) => ({ presentationId: id, body: `receipt body ${id}` }));
+	w.send({ event: "session", sessionId: "sess-1", sessionFile: writeMultiReceiptSessionFile(specs, origin) });
+	w.send({ event: "reconcile" }); // the first agent_settled
+
+	const ackWakes = () => w.lines.filter((l) => l.includes('"kind":"wake"') && l.includes("ack retries exhausted"));
+	const ackReqs = () => fake.requests.filter((r) => r.url === "/notifications/presentation/acknowledge");
+	const ackBodies = () => fake.acks.map((a) => a.presentation_id);
+
+	// The hung pass: 3 bounded identical retries of the FIRST receipt, each
+	// ending only at the worker's per-attempt timeout, then ONE static warning.
+	await w.waitFor((l) => l.includes("ack retries exhausted"), "first ack outage warning", 10000);
+	assert.equal(ackWakes().length, 1, "the whole batch costs exactly ONE warning");
+	assert.ok(!/\b30[123]\b/.test(ackWakes()[0]), `static, no per-receipt id: ${ackWakes()[0]}`);
+	assert.equal(ackReqs().length, 3, "only the first receipt was attempted");
+	assert.deepEqual(ackBodies(), [301, 301, 301], "identical hung retries of the first receipt only");
+
+	// Repeated agent_settled/reconcile triggers — during the backoff AND while
+	// the next background pass hangs — never add warnings and never walk
+	// receipts 302/303 into the black hole.
+	for (let i = 0; i < 14; i++) {
+		w.send({ event: "reconcile" });
+		await sleep(100);
+	}
+	assert.equal(ackWakes().length, 1, "repeated settles against the hang stay quiet");
+	assert.ok(ackBodies().every((id) => id === 301), `no receipt beyond the first was walked into the hang: ${ackBodies()}`);
+
+	// Bytes flow again: the background pass acknowledges ALL qualifying
+	// receipts idempotently; the warning count never grew.
+	ackBehavior = () => "ok";
+	await w.waitFor(
+		(l) => l.includes('"kind":"ack"') && l.includes('"outcome":"acknowledged"') && l.includes("303"),
+		"all receipts acknowledged after recovery",
+		15000,
+	);
+	assert.deepEqual(
+		fake.acks.slice(-3).map((a) => a.presentation_id),
+		[301, 302, 303],
+		"recovery processes every qualifying receipt",
+	);
+	assert.equal(ackWakes().length, 1, "recovery adds no warnings");
+
+	// A NEW hang after recovery warns once again.
+	ackBehavior = () => "hang";
+	w.send({ event: "reconcile" });
+	await w.waitFor(() => ackWakes().length >= 2, "second hang warns again", 10000);
+	assert.equal(ackWakes().length, 2, "a fresh outage after recovery warns exactly once more");
 });

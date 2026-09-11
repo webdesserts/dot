@@ -1231,13 +1231,31 @@ const sseMain = async (config) => {
 	// the background; agent_settled/replay events arriving during that
 	// backoff add NOTHING (no duplicate passes, no extra requests) because
 	// the scheduled pass is the only next pass. Repeated exhaustions climb
-	// the bounded ladder; a settled pass resets it.
+	// the bounded ladder; a settled pass resets it. Triggers arriving while
+	// a pass is IN FLIGHT coalesce into at most one trailing pass (a full
+	// pass re-reads all disk receipts, so coalescing can never lose a
+	// wakeup) — repeated settles against a black-holing edge must never
+	// chain one hung pass after another.
 	let ackOutage = false;
 	let ackRetryAttempt = 0;
 	let ackRetryTimer = null;
+	let ackPassRunning = false;
+	let ackPassDirty = false;
 
 	const enqueueAckPass = () => {
-		ackQueue = ackQueue.then(reconcileNow).catch(() => {});
+		if (ackPassRunning) {
+			ackPassDirty = true;
+			return;
+		}
+		ackPassRunning = true;
+		ackPassDirty = false;
+		ackQueue = ackQueue
+			.then(reconcileNow)
+			.catch(() => {})
+			.then(() => {
+				ackPassRunning = false;
+				if (ackPassDirty && !ackOutage) enqueueAckPass();
+			});
 	};
 
 	queueReconcile = () => {
