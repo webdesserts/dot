@@ -735,7 +735,7 @@ test("SSE worker: repeated stream_error wakes once, a changed failure wakes, onl
 		},
 	});
 	const port = await listen(fake.server);
-	const w = startWorker(port);
+	const w = startWorker(port, { AUTONOMY_SSE_ESCALATE_AFTER_MS: "300" });
 	t.after(() => {
 		w.child.kill();
 		fake.server.close();
@@ -750,9 +750,18 @@ test("SSE worker: repeated stream_error wakes once, a changed failure wakes, onl
 	};
 	const wakes = () => w.lines.filter((l) => l.includes('"kind":"wake"'));
 
-	// Phase 1: the SAME stream_error class on every reconnect stays ONE wake
-	// while the stream is reopened repeatedly (no wake per reconnect).
-	await w.waitFor((l) => l.includes("stream_error received"), "first stream_error wake");
+	// Phase 0: the escalation contract — a failure that heals within the
+	// window is SILENT (owner ruling: no-action alerts don't wake the
+	// model). The first two reconnects land inside the 150ms window; the
+	// wake arrives only once the streak has PERSISTED past it.
+	await waitForStreams(2, "two stream_error reconnects inside the window");
+	await sleep(60);
+	assert.equal(wakes().length, 0, `an in-window failure streak must stay silent (got ${wakes().length}) [${wakes().join(" | ")}]`);
+	await w.waitFor(
+		(l) => l.includes("stream_error received"),
+		"escalated stream_error wake (streak past the window)",
+		8000,
+	);
 	await waitForStreams(3, "three stream_error reconnects");
 	await sleep(250); // further identical reconnects stay quiet
 	assert.equal(wakes().length, 1, `repeated identical stream_error must not wake per reconnect (got ${wakes().length})`);
@@ -1030,7 +1039,12 @@ test("SSE worker: stream and acknowledgement failure suppression are independent
 	});
 	const port = await listen(fake.server);
 	const origin = `http://127.0.0.1:${port}`;
-	const w = startWorker(port, { AUTONOMY_SSE_RECONNECT_BACKOFF_MS: ACK_SPAM_BACKOFF_MS });
+	// Short escalation window: the stream failure must wake within the
+	// test's lifetime (the default 90s is the production contract).
+	const w = startWorker(port, {
+		AUTONOMY_SSE_RECONNECT_BACKOFF_MS: ACK_SPAM_BACKOFF_MS,
+		AUTONOMY_SSE_ESCALATE_AFTER_MS: "150",
+	});
 	t.after(() => {
 		w.child.kill();
 		fake.server.close();

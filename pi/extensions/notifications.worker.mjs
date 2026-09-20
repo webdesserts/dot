@@ -1111,6 +1111,12 @@ const sseMain = async (config) => {
 	// re-arm only on a REAL recovery (clean EOF); the ack domain re-arms
 	// when a reconciliation pass settles without an uncertain outage.
 	const lastFailureClass = { stream: null, ack: null };
+	// The unresolved-outage clock (escalate-on-persistence above): null
+	// while the stream is healthy; set at a streak's first failure; reset
+	// by a clean end. The window's default covers deploy restarts with
+	// margin; tests shorten it.
+	let streamFailureSince = null;
+	const escalateAfterMs = Math.max(0, asNumber(process.env.AUTONOMY_SSE_ESCALATE_AFTER_MS) ?? 90_000);
 	const emitOncePerClass = (domain, failureClass) => {
 		if (failureClass === lastFailureClass[domain]) return;
 		lastFailureClass[domain] = failureClass;
@@ -1455,8 +1461,14 @@ const sseMain = async (config) => {
 						// takeover); if the proof is dead it is dropped there.
 						// This is an ERROR EXIT: the loop must NOT treat it as
 						// recovery, so the identical class stays quiet instead of
-						// waking the model once per reconnect.
-						emitOncePerClass("stream", "stream_error received — the stream is ending");
+						// waking the model once per reconnect. Same
+						// escalate-on-persistence contract as the loop's catch
+						// (this event path never reaches it): a streak that heals
+						// inside the window is silent; one that persists wakes.
+						if (streamFailureSince === null) streamFailureSince = Date.now();
+						if (Date.now() - streamFailureSince >= escalateAfterMs) {
+							emitOncePerClass("stream", "stream_error received — the stream is ending");
+						}
 						streamEnd("stream_error_event");
 						return "stream_error";
 					}
@@ -1523,6 +1535,7 @@ const sseMain = async (config) => {
 				// recovery (a settled reconciliation pass) — never here.
 				lastFailureClass.stream = null;
 				consecutiveFailures = 0;
+				streamFailureSince = null;
 				traceEvent("sseMain", "loop_recovery", {});
 			}
 			await sleep(reconnectBackoff);
@@ -1531,7 +1544,25 @@ const sseMain = async (config) => {
 				failureClass: traceFailureClass(err),
 				httpStatus: err?.httpStatus,
 			});
-			emitOncePerClass("stream", `${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
+			// ESCALATE-ON-PERSISTENCE (owner ruling 2026-09-20: "if
+			// there's no action needed on that alert, we probably
+			// shouldn't be spamming y'all with a message"): a stream
+			// failure that heals within the escalation window (deploy
+			// restarts, brief blips — every one self-heals through this
+			// loop's bounded backoff) emits NOTHING; the model wakes only
+			// when the outage PERSISTS past the window (deliveries
+			// genuinely failing). The clock starts at the streak's FIRST
+			// failure; a clean end resets it. The changed-failure rule
+			// below still applies — a persistent streak's SECOND distinct
+			// class wakes immediately (a streak that long is already
+			// escalated). The window is env-tunable for tests.
+			if (streamFailureSince === null) streamFailureSince = Date.now();
+			// Identity refusals bypass the window: they are terminal and
+			// actionable (SSE stays disabled until the operator fixes the
+			// identity) — never a transient that self-heals.
+			if (err?.identityMismatch || Date.now() - streamFailureSince >= escalateAfterMs) {
+				emitOncePerClass("stream", `${staticFailureClass(err)}; reconnecting with bounded backoff — no legacy fallback`);
+			}
 			if (err instanceof GateError) dropLease("gate_refusal"); // no further authority use from that response
 			if (err?.httpStatus === 404 || err?.httpStatus === 410) dropLease("ownership_gone"); // stop using lost ownership
 			// Exponential, capped reconnect backoff: bounded rate, honest
