@@ -43,6 +43,27 @@ export default function harnessContext(pi: ExtensionAPI) {
 		}
 
 		const agentId = process.env.AUTONOMY_AGENT_ID;
+		// PRIME WORKING MEMORY (autonomy/t:163): the prime seat keeps one
+		// compact working-memory note that AUTO-LOADS at turn start — the
+		// same before_agent_start injection the guests' Working Memory
+		// uses, closing the drift point where a post-compaction or
+		// post-restart turn resumed from the lossy summary instead of live
+		// state. The PRIME seat is the seat with NO AUTONOMY_AGENT_ID
+		// (guest launchers always set one); its note path is configured
+		// once via AUTONOMY_PRIME_MEMORY_PATH — unset means the feature is
+		// OFF (no default, no prose contract, nothing changes for any
+		// other seat).
+		if (!validAgentId(agentId)) {
+			const primeMemoryPath = process.env.AUTONOMY_PRIME_MEMORY_PATH;
+			if (primeMemoryPath) {
+				try {
+					const content = fs.readFileSync(primeMemoryPath, "utf8").trim();
+					parts.push(`# Working Memory (prime, reread this turn)\n\n${content}`);
+				} catch (error) {
+					parts.push(`# Working Memory (prime) unavailable\n\nCould not read ${primeMemoryPath} (${(error as NodeJS.ErrnoException).code ?? error}). Configure it once via AUTONOMY_PRIME_MEMORY_PATH.`);
+				}
+			}
+		}
 		if (!validAgentId(agentId)) {
 			parts.push("# Agent memory unavailable\n\nSet AUTONOMY_AGENT_ID explicitly: a lowercase ASCII letter followed by letters, digits, hyphens or underscores, at most 64 characters. No private Working Memory was loaded; identity is never inferred from cwd.");
 		} else {
