@@ -152,15 +152,6 @@ def device-is [name: string]: nothing -> bool {
   false
 }
 
-# === Prime seat's working-memory note (autonomy/t:163) ===
-# The harness injects this note at the prime seat's turn start (the seat
-# with no AUTONOMY_AGENT_ID — guest launchers always set one, so guests
-# never pick this up). Configured once here, not hardcoded in the
-# extension. The prime's standing duty: keep the note small and current.
-if (device-is "umbra") {
-	$env.AUTONOMY_PRIME_MEMORY_PATH = ($env.HOME | path join 'notes' 'Umbra Working Memory.md')
-}
-
 # === Work-specific config (rhea only) ===
 if (device-is "rhea") {
   let work_env = ("~/.config/work.env" | path expand)
