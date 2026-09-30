@@ -1,6 +1,6 @@
 # Pi codemode alongside Nushell
 
-Checked on Umbra with Pi **0.99.1** and Nu **0.114.0**, 2026-09-30. This is optional host-specific guidance, not a requirement for every client or child agent. Use codemode only when the host offers it and the task authorizes the underlying operations.
+Checked on Umbra with Pi **0.99.1** and Nu **0.114.0**, 2026-09-30. Pi parent orchestrators normally load both Nu and codemode skills and prefer codemode for orchestration. This does not make it mandatory in other clients or widen a child's grants. The task must still authorize the underlying operations.
 
 ## Division of work
 
@@ -8,7 +8,9 @@ Checked on Umbra with Pi **0.99.1** and Nu **0.114.0**, 2026-09-30. This is opti
 - **Codemode:** coordinate several tools, filter their results before returning them to the model, combine Nu output with other tool results, and retain small derived values through `store`/`load`.
 - **Host:** credentials, capability enforcement, effect receipts, cancellation and durable completion delivery. Neither language independently supplies those guarantees.
 
-For one shell operation or a report expressible as one Nu pipeline, call Nu directly. Add codemode when it removes otherwise necessary model round trips or joins results from different capabilities. Avoid moving a good Nu pipeline into JavaScript just to use the new feature.
+Start with codemode for orchestration across capabilities. Keep a report's substantive Nu pipeline in Nu. For a single atomic operation, a direct call can still be simpler than a JavaScript wrapper.
+
+The goal is less repeated work and fewer unnecessary model round trips—not mechanically wrapping everything or moving good Nu pipelines into JavaScript.
 
 ## Consume structured Nu results
 
@@ -44,7 +46,9 @@ Counted porcelain lines are a summary, not a filename parser for automation.
 
 Return a bounded conclusion. Do not dump whole MCP results, environments, credentials or private histories for convenience. Keep necessary artifacts in an approved location.
 
-Filter large data in Nu or Polars before transfer where possible. Otherwise, codemode can filter the full tool result before it enters model context.
+Filter large data in Nu or Polars before transfer where possible. Otherwise, codemode can filter the returned tool result before it enters model context.
+
+A full MCP result is not necessarily the server's original untruncated data. In a later ordinary-work call, Nu returned a truncation note instead of the large value; querying its retained `$history` value recovered the needed pages. Codemode cannot reconstruct data the server omitted.
 
 ## Check all failure layers
 
@@ -85,6 +89,17 @@ Discover registered names with `searchTools()` or `ALL_TOOLS`; do not infer them
 Pi 0.99.2 changes raw MCP hyphen normalization and discovery behavior. The trials above ran on Pi 0.99.1. A separate 0.99.2 compatibility check passed, but the running parents still need coordinated activation.
 
 `describeNamespace()` is a 0.99.2 addition. Do not assume it exists on 0.99.1.
+
+## Lessons for ordinary work
+
+- Prefer codemode for useful orchestration, not as a mechanical wrapper around one call.
+- Keep substantive Nu pipelines in Nu; JavaScript is not automatically a better data language.
+- Decide the needed fields before fetching or returning data. Large batches can create more output and recovery work.
+- Reuse retained values, but validate their lifetime and ownership before trusting them.
+- Return readable text for prose. JSON-wrapped Markdown escapes line breaks and harms readability.
+- Use a few representative checks, then learn from ordinary work rather than expanding every issue into a framework.
+
+No net latency or token saving was measured. Judge useful output, repeated work, repair turns and clarity—not call count alone.
 
 ## Evidence and sources
 

@@ -46,7 +46,9 @@ Do not add parent banks to shared child configuration for convenience. Do not wi
 
 `harness-context.ts` now writes a named `harness_context` section instead of forcing the whole system prompt. This lets native MCP discovery add its own section afterward.
 
-The following behavior is unchanged:
+Pi parents also load the Nushell and codemode skills automatically through this context loader. Codemode is the default orchestration layer; Nu remains the shell/data layer. Missing skill files produce a visible warning. Native children retain their existing selected skills and tool grants.
+
+The following memory behavior is unchanged:
 
 - Explicit memory identity.
 - Per-turn memory rereads.

@@ -42,6 +42,12 @@ export default function harnessContext(pi: ExtensionAPI) {
 			if (content) parts.push(`# ${title}\n\n${content}`);
 		}
 
+		for (const skill of ["nushell", "codemode"]) {
+			const file = path.join(HOME, ".config", "agents", "skills", skill, "SKILL.md");
+			const content = readShared(file);
+			parts.push(`# Workflow skill — ${skill}\n\n${content || `> HARNESS-CONTEXT: workflow skill unavailable: ${file}`}`);
+		}
+
 		const agentId = process.env.AUTONOMY_AGENT_ID;
 		if (!validAgentId(agentId)) {
 			parts.push("# Agent memory unavailable\n\nSet AUTONOMY_AGENT_ID explicitly: a lowercase ASCII letter followed by letters, digits, hyphens or underscores, at most 64 characters. No private Working Memory was loaded; identity is never inferred from cwd.");

@@ -121,15 +121,15 @@ In the tested Nu MCP server (including native Pi 0.99.1), only the final returne
 
 Nu promotion deadlines and the client's transport deadline are independent. Raising `NU_MCP_PROMOTE_AFTER` does not guarantee a long request survives. A timeout/reset may lose the enclosing receipt while external work continues. Check exact job/process state before retrying mutations; persist important receipts and use supported background completion instead of relying on a long open request.
 
-## Optional Pi codemode orchestration
+## Pi parent orchestration with codemode
 
-When the host offers `codemode`, use it to coordinate several tools or filter their results before returning them to the model. Keep shell work and substantial structured pipelines in Nu; a single Nu call usually needs no JavaScript wrapper. Do not change a child's tool grants just to enable this pattern.
+Pi parent orchestrators normally load both the Nushell and codemode skills. Prefer codemode for coordinating tools and shaping returned results; keep shell work and substantial data pipelines in Nu. A direct atomic Nu call remains appropriate when a wrapper adds no useful coordination. Do not change a child's tool grants just to enable this pattern.
 
 Native MCP calls return a `CallToolResult`: check `isError` before reading a successful Nu evaluation's `structuredContent.output`. External commands captured with `complete` still require their own `exit_code` check. A completed codemode script can contain failed operations.
 
 Nu bindings can survive an error; completed tool effects are not rolled back when a later script step fails. Codemode `store`/`load`, Nu REPL values and durable job receipts have different lifetimes. Serialize dependent/stateful Nu calls, and do not mistake `await` or a Nu mailbox for an agent wake.
 
-See [tested codemode/Nu boundaries and examples](references/codemode.md). This optional layer complements Nu; it does not replace the host's authority, recovery or persistence contracts.
+See the [codemode skill](../codemode/SKILL.md) and [tested Nu integration examples](references/codemode.md). This layer complements Nu; it does not replace the host's authority, recovery or persistence contracts.
 
 ## Reusable capabilities
 

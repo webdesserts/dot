@@ -19,6 +19,12 @@ Clarify requirements when the goal is unclear, and include visual review when ap
 
 Scale these gates to risk. A trivial mechanical change does not need multiple reviewers. Use distinct review questions, not duplicate full investigations. Reviewers provide evidence; the parent accepts, defers or escalates findings. Do not make native “ready,” a launch receipt or green tests the sole gate for the next consequential writer.
 
+## Tool composition
+
+Choose the simplest effective interface and return only the evidence needed for the next decision. Fewer tool calls alone is not an efficiency metric; judge repeated work, output size, repair turns and clarity.
+
+In Pi parent sessions, load the Nushell and codemode skills by default. Prefer codemode for orchestration and Nu for shell/data execution. Preserve child tool contracts and continue recording representative successes and friction.
+
 ## Compact briefs
 
 State the outcome, exact cwd/ref and expected starting state, allowed files/contracts/actions, settled decisions, useful symbols, focused validation, output binding and stop conditions. Distinguish local component evidence from whole-task acceptance. Supply only the context needed for the current chunk, not the entire conversation or incident archive. A successor needs the actual predecessor artifact and its unfinished/uncertain state.

@@ -23,6 +23,11 @@ async function fixture(t) {
     writeFileSync(join(home, 'notes', 'agents', id, `Working Memory — ${id}.md`), `${id}-private-marker`);
   }
   writeFileSync(join(home, 'notes', 'Working Memory.md'), 'POOLED-POISON');
+  for (const skill of ['nushell', 'codemode']) {
+    const directory = join(home, '.config', 'agents', 'skills', skill);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'SKILL.md'), `${skill}-workflow-marker`);
+  }
   const source = readFileSync(new URL('../../extensions/harness-context.ts', import.meta.url), 'utf8');
   const js = stripTypeScriptTypes(source);
   const module = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}#${encodeURIComponent(home)}`);
@@ -73,7 +78,24 @@ test('memory composes with MCP discovery without forcing the whole system prompt
   assert.ok(result.systemPromptOptions.sections.harness_context.includes('iris-private-marker'));
 });
 
-test('native children do not inherit private memory from the parent environment', async t => {
+test('parents load both workflow skills and reread updated guidance', async t => {
+  const f = await fixture(t);
+  process.env.AUTONOMY_AGENT_ID = 'iris';
+  const first = (await f.run()).systemPrompt;
+  assert.ok(first.includes('nushell-workflow-marker'));
+  assert.ok(first.includes('codemode-workflow-marker'));
+  writeFileSync(join(f.home, '.config/agents/skills/codemode/SKILL.md'), 'updated-codemode-guidance');
+  assert.ok((await f.run()).systemPrompt.includes('updated-codemode-guidance'));
+});
+
+test('missing workflow skills produce a visible warning', async t => {
+  const f = await fixture(t);
+  process.env.AUTONOMY_AGENT_ID = 'iris';
+  rmSync(join(f.home, '.config/agents/skills/codemode/SKILL.md'));
+  assert.ok((await f.run()).systemPrompt.includes('workflow skill unavailable'));
+});
+
+test('native children do not inherit private memory or workflow skills from the parent', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
   process.env.PI_SUBAGENT_CHILD = '1';
