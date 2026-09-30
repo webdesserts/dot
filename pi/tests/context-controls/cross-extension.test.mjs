@@ -180,7 +180,9 @@ async function teardownCrossSession({ session, ownedAgentDir, ownedCwd, closeSer
 }
 
 const seedContext = (session) => {
-	for (const filler of ["Old filler context. ".repeat(60_000), "Recent filler context. ".repeat(60_000)]) {
+	// Keep the manual-compaction scenario below Pi's pre-prompt auto-compaction
+	// threshold; otherwise the gated hook runs before the faux compact tool.
+	for (const filler of ["Old filler context. ".repeat(8_000), "Recent filler context. ".repeat(8_000)]) {
 		session.sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: filler }],

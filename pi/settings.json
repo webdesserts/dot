@@ -32,7 +32,6 @@
     "openai-codex/gpt-6-astra": "medium"
   },
   "packages": [
-    "npm:pi-mcp-adapter",
     {"source": "npm:@luxusai/pi-hindsight", "extensions": [], "skills": []},
     "npm:pi-subagents"
   ],
@@ -46,7 +45,8 @@
   ],
   "extensions": [
     "extensions/harness-context.ts",
-    "extensions/notifications.ts"
+    "extensions/notifications.ts",
+    "extensions/mcp-profiles.ts"
   ],
   "lastChangelogVersion": "0.85.0",
   "theme": "neapolitan-light",

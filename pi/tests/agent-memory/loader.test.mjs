@@ -28,7 +28,12 @@ async function fixture(t) {
   const module = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}#${encodeURIComponent(home)}`);
   let hook;
   module.default({ on(name, handler) { assert.equal(name, 'before_agent_start'); hook = handler; } });
-  return { home, run: () => hook({ systemPrompt: 'base', cwd: '/same-cwd' }) };
+  return { home, run: async () => {
+    const options = { sections: { mcp_servers: 'MCP-DISCOVERY-MARKER' } };
+    await hook({ systemPrompt: 'base', cwd: '/same-cwd', systemPromptOptions: options });
+    if (!('harness_context' in options.sections)) return undefined;
+    return { systemPrompt: ['base', ...Object.values(options.sections)].join('\n'), systemPromptOptions: options };
+  } };
 }
 
 test('explicit identities select separate notes and reread current content', async t => {
@@ -57,6 +62,15 @@ test('absent, invalid and missing-note selections never use pooled memory', asyn
   assert.ok((await f.run()).systemPrompt.includes('No other Working Memory'));
   process.env.AUTONOMY_AGENT_ID = 'a'.repeat(64);
   assert.ok((await f.run()).systemPrompt.includes('Agent ID:'));
+});
+
+test('memory composes with MCP discovery without forcing the whole system prompt', async t => {
+  const f = await fixture(t);
+  process.env.AUTONOMY_AGENT_ID = 'iris';
+  const result = await f.run();
+  assert.equal(result.systemPromptOptions.forceSystemPrompt, undefined);
+  assert.equal(result.systemPromptOptions.sections.mcp_servers, 'MCP-DISCOVERY-MARKER');
+  assert.ok(result.systemPromptOptions.sections.harness_context.includes('iris-private-marker'));
 });
 
 test('native children do not inherit private memory from the parent environment', async t => {

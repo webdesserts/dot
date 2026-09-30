@@ -56,6 +56,8 @@ export default function harnessContext(pi: ExtensionAPI) {
 			}
 		}
 
-		return { systemPrompt: `${event.systemPrompt}\n\n${parts.join("\n\n---\n\n")}` };
+		// Compose with native sections (including deferred MCP discovery), rather
+		// than freezing a whole-prompt override before later handlers run.
+		event.systemPromptOptions.sections.harness_context = parts.join("\n\n---\n\n");
 	});
 }

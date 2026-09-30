@@ -38,6 +38,21 @@ Sources: [programming model](https://github.com/PrimeIntellect-ai/prime-agent/bl
 
 An important local example: an evaluation exceeded the outer MCP deadline despite a larger Nu promotion threshold. The session reset while external work finished, losing the enclosing receipt. Do not infer the exact failure mechanism from documentation about promotion; a reliable primary interface must test and define it.
 
+## Pi codemode as a complementary layer
+
+The [codemode and Nu trials](codemode.md) on Pi 0.99.1 tested a complementary layer, not a replacement shell:
+
+- Nu retained and transformed data.
+- JavaScript coordinated tools and returned a small summary.
+- Structured results and warm-session state reuse worked.
+- A failed script did not undo completed Nu effects, but its codemode store change was discarded.
+
+This supports **code over retained values**. It does not establish a Nu-only kernel or a net performance win.
+
+An eventual Autonomy implementation still needs host-owned authorization, per-effect receipts, honest partial-failure reporting, explicit state ownership and durable completion. Successes, friction and untested boundaries are recorded in [[Pi Codemode + Nushell — trials and Autonomy implications]].
+
+This note does not authorize an implementation or architecture switch.
+
 ## Focused experiments before a switch
 
 1. **Typed command facade:** wrap a few fixture-only host operations as Nu commands. Compare discoverability, argument errors and composition against today's separate tools. Keep domain validation in the host.
