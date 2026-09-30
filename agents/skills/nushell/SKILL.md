@@ -125,6 +125,8 @@ Nu promotion deadlines and the client's transport deadline are independent. Rais
 
 Pi parent orchestrators normally load both the Nushell and codemode skills. Prefer codemode for coordinating tools and shaping returned results; keep shell work and substantial data pipelines in Nu. A direct atomic Nu call remains appropriate when a wrapper adds no useful coordination. Do not change a child's tool grants just to enable this pattern.
 
+Use Pi's native advertised skill paths or `/skill:name` to load the instructions. A recent post-compaction reminder asks for these reads; it does not manually embed skill bodies into the system prompt or guarantee model compliance.
+
 Native MCP calls return a `CallToolResult`: check `isError` before reading a successful Nu evaluation's `structuredContent.output`. External commands captured with `complete` still require their own `exit_code` check. A completed codemode script can contain failed operations.
 
 Nu bindings can survive an error; completed tool effects are not rolled back when a later script step fails. Codemode `store`/`load`, Nu REPL values and durable job receipts have different lifetimes. Serialize dependent/stateful Nu calls, and do not mistake `await` or a Nu mailbox for an agent wake.

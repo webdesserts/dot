@@ -7,6 +7,8 @@ description: "Default Pi tool orchestration: compose calls, bound output, inspec
 
 Pi parent orchestrators normally load this skill and the Nushell skill together. Prefer codemode as the orchestration layer; keep shell execution and substantial data pipelines in Nu.
 
+Use Pi's native advertised skill paths or `/skill:name` to load the instructions. A recent post-compaction reminder asks for these reads; it does not manually embed skill bodies into the system prompt or guarantee model compliance.
+
 A direct atomic tool call is still appropriate when a wrapper adds no useful coordination. Fewer top-level calls alone is not an efficiency metric.
 
 ## Working pattern

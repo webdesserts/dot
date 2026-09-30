@@ -31,73 +31,112 @@ async function fixture(t) {
   const source = readFileSync(new URL('../../extensions/harness-context.ts', import.meta.url), 'utf8');
   const js = stripTypeScriptTypes(source);
   const module = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}#${encodeURIComponent(home)}`);
-  let hook;
-  module.default({ on(name, handler) { assert.equal(name, 'before_agent_start'); hook = handler; } });
-  return { home, run: async () => {
+  const hooks = new Map();
+  const branch = [];
+  const messages = [];
+  module.default({
+    on(name, handler) { hooks.set(name, handler); },
+    sendMessage(message, options) {
+      messages.push({ message, options });
+      branch.push({ type: 'custom_message', id: `snapshot-${messages.length}`, ...message });
+    },
+  });
+  const context = { sessionManager: { getBranch: () => branch.slice() } };
+  const emit = async (name, event = {}) => hooks.get(name)?.(event, context);
+  return { home, branch, messages, emit, run: async () => {
     const options = { sections: { mcp_servers: 'MCP-DISCOVERY-MARKER' } };
-    await hook({ systemPrompt: 'base', cwd: '/same-cwd', systemPromptOptions: options });
+    await emit('before_agent_start', { systemPrompt: 'base', cwd: '/same-cwd', systemPromptOptions: options });
     if (!('harness_context' in options.sections)) return undefined;
     return { systemPrompt: ['base', ...Object.values(options.sections)].join('\n'), systemPromptOptions: options };
   } };
 }
 
-test('explicit identities select separate notes and reread current content', async t => {
+test('explicit identities select separate chronological snapshots, never pooled memory', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
-  const iris = (await f.run()).systemPrompt;
-  assert.ok(iris.includes('iris-private-marker'));
-  assert.ok(!iris.includes('rhea-private-marker') && !iris.includes('POOLED-POISON'));
+  await f.emit('session_start');
+  assert.ok(f.messages[0].message.content.includes('iris-private-marker'));
+  assert.ok(!f.messages[0].message.content.includes('rhea-private-marker'));
+  assert.equal(f.messages[0].options.triggerTurn, false);
   process.env.AUTONOMY_AGENT_ID = 'rhea';
-  const rhea = (await f.run()).systemPrompt;
-  assert.ok(rhea.includes('rhea-private-marker') && !rhea.includes('iris-private-marker'));
-  writeFileSync(join(f.home, 'notes/agents/rhea/Working Memory — rhea.md'), 'rhea-updated-marker');
-  assert.ok((await f.run()).systemPrompt.includes('rhea-updated-marker'));
+  await f.emit('session_start');
+  assert.ok(f.messages[1].message.content.includes('rhea-private-marker'));
+  assert.ok(!f.messages[1].message.content.includes('iris-private-marker'));
+  assert.ok(f.messages.every(row => !row.message.content.includes('POOLED-POISON')));
 });
 
-test('absent, invalid and missing-note selections never use pooled memory', async t => {
+test('absent, invalid and missing-note selections produce message warnings without fallback', async t => {
   const f = await fixture(t);
-  for (const id of [undefined, '', 'Iris', '../iris', 'iris\n', 'a'.repeat(65)]) {
+  for (const id of [undefined, '', 'Iris', '../iris', 'iris\n', 'a'.repeat(65), 'missing', 'a'.repeat(64)]) {
+    f.branch.length = 0;
     if (id === undefined) delete process.env.AUTONOMY_AGENT_ID;
     else process.env.AUTONOMY_AGENT_ID = id;
-    const prompt = (await f.run()).systemPrompt;
-    assert.ok(prompt.includes('Agent memory unavailable'));
-    assert.ok(!prompt.includes('private-marker') && !prompt.includes('POOLED-POISON'));
+    await f.emit('session_start');
+    const body = f.messages.at(-1).message.content;
+    assert.ok(body.includes('Agent memory unavailable'));
+    assert.ok(!body.includes('private-marker') && !body.includes('POOLED-POISON'));
   }
-  process.env.AUTONOMY_AGENT_ID = 'missing';
-  assert.ok((await f.run()).systemPrompt.includes('No other Working Memory'));
-  process.env.AUTONOMY_AGENT_ID = 'a'.repeat(64);
-  assert.ok((await f.run()).systemPrompt.includes('Agent ID:'));
 });
 
-test('memory composes with MCP discovery without forcing the whole system prompt', async t => {
+test('system guidance composes with MCP and excludes memory and manually copied skill bodies', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
+  await f.emit('session_start');
   const result = await f.run();
   assert.equal(result.systemPromptOptions.forceSystemPrompt, undefined);
   assert.equal(result.systemPromptOptions.sections.mcp_servers, 'MCP-DISCOVERY-MARKER');
-  assert.ok(result.systemPromptOptions.sections.harness_context.includes('iris-private-marker'));
+  assert.ok(!result.systemPrompt.includes('private-marker'));
+  assert.ok(!result.systemPrompt.includes('nushell-workflow-marker'));
+  assert.ok(!result.systemPrompt.includes('codemode-workflow-marker'));
+  assert.ok(result.systemPrompt.includes('Agent ID: iris'));
 });
 
-test('parents load both workflow skills and reread updated guidance', async t => {
+test('restart preserves snapshots and successful compaction appends current state chronologically', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
-  const first = (await f.run()).systemPrompt;
-  assert.ok(first.includes('nushell-workflow-marker'));
-  assert.ok(first.includes('codemode-workflow-marker'));
-  writeFileSync(join(f.home, '.config/agents/skills/codemode/SKILL.md'), 'updated-codemode-guidance');
-  assert.ok((await f.run()).systemPrompt.includes('updated-codemode-guidance'));
+  await f.emit('session_start');
+  writeFileSync(join(f.home, 'notes/agents/iris/Working Memory — iris.md'), 'iris-updated-marker');
+  await f.emit('session_start');
+  assert.equal(f.messages.length, 1);
+  assert.ok(f.messages[0].message.content.includes('iris-private-marker'));
+  await f.emit('session_compact_failed');
+  assert.equal(f.messages.length, 1);
+  f.branch.push({ type: 'compaction', id: 'compact-1' });
+  await f.emit('session_compact', { compactionEntry: { id: 'compact-1' }, willRetry: false });
+  assert.equal(f.messages.length, 2);
+  assert.ok(f.messages[1].message.content.includes('iris-updated-marker'));
+  assert.equal(f.messages[1].message.details.checkpointId, 'compact-1');
+  assert.equal(f.messages[1].options.triggerTurn, false);
+  assert.equal(f.branch.at(-2).type, 'compaction');
+  await f.emit('session_start');
+  assert.equal(f.messages.length, 2);
 });
 
-test('missing workflow skills produce a visible warning', async t => {
+test('active compaction/retry uses native steering and startup repairs an undelivered checkpoint', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
-  rmSync(join(f.home, '.config/agents/skills/codemode/SKILL.md'));
-  assert.ok((await f.run()).systemPrompt.includes('workflow skill unavailable'));
+  await f.emit('agent_start');
+  f.branch.push({ type: 'compaction', id: 'active-compact' });
+  await f.emit('session_compact', { compactionEntry: { id: 'active-compact' }, willRetry: false });
+  assert.equal(f.messages[0].options.triggerTurn, true);
+  assert.equal(f.messages[0].options.deliverAs, 'steer');
+  await f.emit('agent_end');
+  f.branch.push({ type: 'compaction', id: 'retry-compact' });
+  await f.emit('session_compact', { compactionEntry: { id: 'retry-compact' }, willRetry: true });
+  assert.equal(f.messages[1].options.triggerTurn, true);
+  f.branch.push({ type: 'compaction', id: 'interrupted-compact' });
+  await f.emit('session_start');
+  assert.equal(f.messages[2].message.details.checkpointId, 'interrupted-compact');
+  assert.equal(f.messages[2].options.triggerTurn, false);
 });
 
-test('native children do not inherit private memory or workflow skills from the parent', async t => {
+test('native children inherit neither private snapshots nor parent system guidance', async t => {
   const f = await fixture(t);
   process.env.AUTONOMY_AGENT_ID = 'iris';
   process.env.PI_SUBAGENT_CHILD = '1';
+  await f.emit('session_start');
+  await f.emit('agent_start');
+  await f.emit('session_compact', { compactionEntry: { id: 'child-compact' }, willRetry: true });
+  assert.equal(f.messages.length, 0);
   assert.equal(await f.run(), undefined);
 });

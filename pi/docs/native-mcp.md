@@ -44,16 +44,13 @@ Do not add parent banks to shared child configuration for convenience. Do not wi
 
 ## Preserve context and notifications
 
-`harness-context.ts` now writes a named `harness_context` section instead of forcing the whole system prompt. This lets native MCP discovery add its own section afterward.
+`harness-context.ts` uses a named section for stable guidance, not a whole-prompt override. The documented `before_agent_start` hook applies to user-submitted prompts; it is not a promise of persistent sections across every custom-message wake.
 
-Pi parents also load the Nushell and codemode skills automatically through this context loader. Codemode is the default orchestration layer; Nu remains the shell/data layer. Missing skill files produce a visible warning. Native children retain their existing selected skills and tool grants.
+Working Memory is delivered as a native custom context message at the first checkpoint and after successful compaction. It remains chronological history rather than replacing the system prefix with the latest edited file. Ordinary restart does not duplicate a delivered checkpoint; an interrupted checkpoint is recovered on startup. Manual compaction adds the snapshot without starting a model run solely to consume it. An active loop or planned retry receives it through native steering.
 
-The following memory behavior is unchanged:
+A short recent reminder asks the parent to load Nu and codemode through the native advertised skill paths or `/skill:name`. Existing discovery settings remain sufficient. This is on-demand skill loading, not deterministic full-body preloading or custom system-section copying. Codemode remains the preferred orchestration layer and Nu the shell/data layer.
 
-- Explicit memory identity.
-- Per-turn memory rereads.
-- Honest unavailable-note warnings.
-- Child exclusion.
+Explicit identity, unavailable-note warnings and child exclusion are preserved. No pooled or other-agent note is used as a fallback. Native children retain their existing selected skills and tool grants.
 
 The notification worker and protocol were not changed by this migration. Preserve the trusted origin and the machine's own credential, actor and SSE environment.
 
