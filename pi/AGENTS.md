@@ -6,6 +6,10 @@ The machine's live context — notetaking/memory conventions, device + fleet fac
 
 Persistent, cross-machine memory lives in the **obsidian-memory** MCP (the notes vault). Use the native `mcp__obsidian_memory__remember`, `mcp__obsidian_memory__search`, `mcp__obsidian_memory__read_note`, and `mcp__obsidian_memory__write_note` tools per the notetaking conventions. Pi's native MCP manager is `/mcp`; discovery and batched calls use `tool_search` and `codemode`, not the retired adapter's `mcp`/`mcpScript` tools.
 
+## Autonomy tag authority
+
+Never create a new Autonomy tag or tagset without Michael's explicit permission. A task title, topic, draft namespace, or convenient grouping is not permission to mint a tag. Before creating or moving a task, problem, observation, project, or feed, use an existing owner-approved tagset; if the requested destination would introduce a tag, stop and ask. This restriction applies equally to temporary records and planning/card-maintenance work.
+
 ## Notification queue discipline (autonomy daemon)
 
 The autonomy daemon's notification queue is yours to manage — it is the truthful record of what is unattended, so keep it honest:

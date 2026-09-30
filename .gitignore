@@ -1,1 +1,4 @@
 .DS_Store
+
+# Local Hindsight retention queues and cursors.
+.pi/hindsight/
