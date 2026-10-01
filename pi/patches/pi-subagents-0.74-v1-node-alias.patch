@@ -1,0 +1,18 @@
+--- a/src/runs/background/runner-aliases.js
++++ b/src/runs/background/runner-aliases.js
+@@ -138,7 +138,14 @@ export function resolveHostPeerAliases(piPackageRoot) {
+     // hosts retain the required aliases, rather than hiding a broken install.
+     const stableVersion = typeof hostManifest?.version === "string" ? /^0\.(\d+)\.\d+$/.exec(hostManifest.version) : null;
+     const isPreChord = stableVersion !== null && Number(stableVersion[1]) < 85;
+-    const required = [...HOST_PEER_ALIASES, ...(isPreChord ? [] : CHORD_PEER_ALIASES)];
++    // HACK: Pi v1 removed the unused agent-core/node export. Remove this
++    // workaround when an upstream pi-subagents release handles that removal.
++    const stableV1 = typeof hostManifest?.version === "string" && /^1\.\d+\.\d+$/.test(hostManifest.version);
++    const required = [...HOST_PEER_ALIASES, ...(isPreChord ? [] : CHORD_PEER_ALIASES)].filter(({ specifier, pkg, subpath }) => {
++        if (!stableV1 || specifier !== "@earendil-works/pi-agent-core/node") return true;
++        const packageDir = findPeerPackageDir(piPackageRoot, pkg, hostManifest?.name);
++        return packageDir !== undefined && resolvePackageSubpath(packageDir, subpath) !== undefined;
++    });
+     for (const { specifier, pkg, subpath } of required) {
+         const packageDir = findPeerPackageDir(piPackageRoot, pkg, hostManifest?.name);
+         const target = packageDir ? resolvePackageSubpath(packageDir, subpath) : undefined;
