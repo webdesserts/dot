@@ -18,7 +18,7 @@
       },
       "claim-reviewer": {
         "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
         "model": "umbra/glm-5.3-flash"
       },
       "coherence-reviewer": {
