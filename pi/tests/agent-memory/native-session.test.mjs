@@ -41,11 +41,14 @@ async function fixture(t, automatic) {
     cwd: home, agentDir, settingsManager, noSkills: true, noPromptTemplates: true,
     noThemes: true, noContextFiles: true,
     extensionFactories: [module.default, pi => {
-      pi.on('session_before_compact', event => ({ compaction: {
-        summary: `Public fixture summary ${++compactCount}`,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
-        tokensBefore: event.preparation.tokensBefore,
-      } }));
+      pi.on('session_before_compact', event => {
+        compactCount++;
+        return { compaction: {
+          summary: 'Public fixture summary',
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+        } };
+      });
     }],
   });
   await resourceLoader.reload();
@@ -99,12 +102,22 @@ test('manual compaction persists fresh memory without a new model run; custom wa
   assert.equal(snapshots[1].details.checkpointId, compact.id);
   await f.session.extensionRunner.emit({ type: 'session_start', reason: 'reload' });
   assert.equal(f.snapshotEntries().length, 2, 'ordinary reload must not duplicate the snapshot');
+  writeFileSync(f.note, 'REPEATED-SUMMARY-PUBLIC-STATE');
+  await f.session.compact();
+  assert.equal(f.compactions, 2);
+  const latestCheckpoint = f.session.sessionManager.getBranch().findLast(entry => entry.type === 'compaction');
+  assert.equal(f.snapshotEntries().length, 3);
+  assert.equal(f.snapshotEntries().at(-1).details.checkpointId, latestCheckpoint.id);
+  assert.ok(f.snapshotEntries().at(-1).content.includes('REPEATED-SUMMARY-PUBLIC-STATE'));
   f.faux.setResponses([fauxAssistantMessage([fauxToolCall('read', { path: f.toolFile })]), f.capture]);
   await f.session.sendCustomMessage({ customType: 'public-notification', content: 'Public wake', display: false },
     { triggerTurn: true, deliverAs: 'steer' });
-  assert.ok(text(f.captured.at(-1)).includes('NEW-PUBLIC-STATE'));
-  for (const message of f.captured.at(-1).filter(message => message.role === 'system')) {
-    assert.ok(!text([message]).includes('NEW-PUBLIC-STATE'));
+  assert.ok(text(f.captured.at(-1)).includes('REPEATED-SUMMARY-PUBLIC-STATE'));
+  for (const messages of f.captured) {
+    const system = text(messages.filter(message => message.role === 'system'));
+    for (const marker of ['OLD-PUBLIC-STATE', 'NEW-PUBLIC-STATE', 'REPEATED-SUMMARY-PUBLIC-STATE']) {
+      assert.ok(!system.includes(marker));
+    }
   }
 });
 

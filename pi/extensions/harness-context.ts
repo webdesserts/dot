@@ -89,7 +89,9 @@ export default function harnessContext(pi: ExtensionAPI) {
 	pi.on("session_compact", (event, ctx) => {
 		// Queue into an already-running loop/retry; idle compaction adds context
 		// without starting a model run solely to consume the snapshot.
-		sendSnapshot(ctx, event.compactionEntry.id, activeLoop || event.willRetry);
+		// Bind to the committed checkpoint; equal summary text is not identity.
+		const compact = ctx.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
+		sendSnapshot(ctx, compact?.id ?? event.compactionEntry.id, activeLoop || event.willRetry);
 	});
 
 	pi.on("before_agent_start", async (event) => {
