@@ -56,6 +56,27 @@ The notification worker and protocol were not changed by this migration. Preserv
 
 Diagnose transport problems separately. A runtime update or an absent optional setting does not establish their cause. Do not enable private prompt or credential tracing as a migration smoke test.
 
+## Narrow shell tools for an owned task worktree
+
+Pi-subagents supports project-scoped overrides of existing roles. Where a task requires Nu-only shell work, its owned worktree can exclude the direct Bash tool without changing global role defaults or creating another agent profile:
+
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "worker": { "excludeTools": ["bash"] },
+      "forecast-reviewer": { "excludeTools": ["bash"] }
+    }
+  }
+}
+```
+
+Place this in the worktree's `.pi/settings.json`, merging with existing settings and exclusions rather than replacing them. Coordinate at a quiescent writer boundary. Launch/discover from the intended task cwd and verify the resolved contract; project settings apply to that project until changed, not to one call automatically. Retained children keep their stored contract.
+
+The installed 0.74.0 public call schema has no direct per-call tools/excludeTools parameter. Do not invent one or use a delayed tool-count budget as an immediate tool deny. Native discovery and builtin launch-plan checks confirmed the project exclusion preserves the model, skills and Nu selections while removing Bash. No real child was launched for that check.
+
+This removes the direct Bash tool only. Nu remains capable of commands and filesystem writes, including invoking another executable; it is not a read-only sandbox or proof of complete shell-language enforcement.
+
 ## Check the integration
 
 After resuming the same conversation, verify:
