@@ -4,57 +4,68 @@
   "subagents": {
     "disableBuiltins": true,
     "defaultSubagentOnlyExtensions": [],
-    "defaultModel": "umbra/glm-5.3-flash",
+    "defaultModel": "openai-codex/gpt-6-luna",
+    "defaultThinking": "medium",
     "agentOverrides": {
       "analyst": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "architect": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "claim-reviewer": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "coherence-reviewer": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "designer": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "medium"
       },
       "forecast-reviewer": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "hunt": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "notetaker": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
       },
       "planner": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "worker": {
         "skills": ["nushell"],
         "tools": ["read", "write", "edit", "bash", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
       },
       "delegate": {
         "disabled": true
@@ -65,7 +76,8 @@
       "researcher": {
         "skills": ["nushell"],
         "tools": ["read", "write", "web_search", "fetch_content", "get_search_content", "source_check", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "medium"
       },
       "reviewer": {
         "disabled": true
@@ -73,14 +85,17 @@
       "scout": {
         "skills": ["nushell"],
         "tools": ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
-        "model": "umbra/glm-5.3-flash"
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
       }
     },
     "modelScope": {
       "enforce": true,
       "strict": true,
       "allow": [
-        "umbra/glm-5.3-flash"
+        "umbra/glm-5.3-flash",
+        "openai-codex/gpt-6.1-sol",
+        "openai-codex/gpt-6-luna"
       ]
     }
   },
