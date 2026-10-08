@@ -3,112 +3,45 @@ name: testing
 description: "Testing guidelines and philosophy. Use when writing, modifying, or reviewing tests, working with test files, deciding what kind of tests to write, adding snapshot or visual tests, or discussing test strategy and edge cases."
 ---
 
-## Testing Philosophy
+# Testing
 
-Tests validate the **user experience** — where "user" varies by product:
+Test behavior that matters to the person or developer using the product. Use concrete examples; small synthetic fixtures and mocks are useful when they faithfully represent that behavior.
 
-- **Application** → the person touching the UI
-- **Library** → the developer consuming the API
-- **CLI** → the person running commands (treat CLI output as its UI)
+## Choose checks by risk
 
-All tests should be grounded in **real-world user scenarios and edge cases**, never abstract or synthetic.
+Before adding coverage, identify what could fail, who would be affected, and the likely consequence. Consider exposure, reversibility, expected lifetime and maintenance cost. Choose the cheapest reliable evidence for that risk; a short explanation is usually enough.
 
-## Test Hierarchy
+- Put detailed correctness checks at the smallest boundary that owns the behavior.
+- Use cross-system tests when the interaction is the risk, not to repeat every lower-level case.
+- Temporary adapters and personal tools usually need a workflow smoke check and important failure checks, not exhaustive tests of their host.
+- Data loss, unauthorized effects and difficult recovery deserve targeted safeguards even in temporary work.
 
-**Test at the smallest reliable boundary that owns the behavior.** Put detailed correctness tests in the owning crate or library: public-API integration tests for its contracts, focused unit tests for local logic and high-input-variation components. Use cross-system tests where the interaction itself is the risk, not to repeat every lower-level case.
+A conceivable edge case is not automatically a requirement. Check relevant BDD specs and agreed criteria; add scenarios only when they describe accepted behavior.
 
-Match effort to consequence, likelihood, expected lifetime, and maintenance cost. Temporary adapters and personal tooling generally need high-level smoke tests for the intended workflow, visible output, and major failures—not exhaustive validation of the host application's internals. Serious risks such as data loss or unauthorized effects still warrant targeted checks.
+Stop expanding coverage when the agreed behavior and material risks have adequate evidence. If scaffolding or repeated reviews cost more than the confidence they add, narrow the next check or propose deferral. Escalate unresolved changes to agreed requirements; do not silently waive them.
 
-Before expanding coverage, name the observation, the actual problem for a consumer, and why solving it is worth the cost. A conceivable edge case is not automatically a requirement. If test scaffolding or repeated review cycles cost more than the remaining confidence they provide, report what is verified and propose the smallest next check or a deferral. Ask the owner when the value is unclear; don't silently waive agreed criteria or turn every finding into another test project.
+## Write useful tests
 
-## Spec Alignment
+Name tests for the behavior and expected outcome. Prefer public or owning-library interfaces over copied implementation logic. Isolate mutable state in memory or uniquely owned temporary data. Mock external boundaries rather than deep internals.
 
-Always check for BDD specs (`specs/*.feature`) and keep tests in sync with them:
+Use deterministic events or clocks instead of sleeps where practical. Keep setup and assertions readable; comments should explain a non-obvious rule, not restate the code.
 
-- Before writing tests, read relevant specs to understand expected behavior
-- Call out when tests diverge from specs — this is a signal, not noise
-- Add discovered edge cases to specs when they represent agreed behavior; don't promote every hypothetical case into a requirement
+For a behavioral fix, prefer a regression test that fails for the actual defect and passes after correction. Compilation failure alone does not demonstrate a behavioral guard. Tests may arrive with signature or type changes; say what was actually observed.
 
-## Failing Tests Are Signals
+## Treat failures honestly
 
-Never "just get the test to pass." A failing test is telling you something:
+Classify the failure before changing code or expectations. Fix the cause, not merely the test result. Do not retry an unchanged failure until it passes or repair unrelated behavior to hide it.
 
-- Is it exposing an edge case you didn't consider?
-- Is it revealing a feature conflict?
-- Did the implementation change the expected behavior?
+Flaky tests are defects to investigate. Removing tests requires explicit user consent; do not delete a failing check because it is inconvenient. Flag obsolete or incorrect tests and resolve the intended behavior.
 
-Investigate what the failure means before deciding how to fix it. The fix might be in the code, not the test.
+Preserve relevant failed results. Distinguish executed checks from source inspection, simulation and unverified claims.
 
-## Test Removal Policy
+## Visual and output checks
 
-**Never remove a test because it's "too much trouble."** Removing a test without explicit user consent is never acceptable. Tests are an agent's eyes and ears — they validate your own work and catch regressions you can't see.
+When appearance or interaction changes, inspect the rendered result. Add visual or output snapshots when they provide stable, useful regression coverage; they are not mandatory for every component.
 
-If a test seems wrong or outdated, flag it and discuss rather than deleting.
+Review meaningful snapshot differences before accepting them. On a screenshot failure, inspect the reference, actual and difference images. Treat CLI output as an interface too, using focused output checks where its contract matters.
 
-## Flaky Tests
+At a significant milestone or overrun, note which checks found real problems and which added little value. Use that evidence to choose the next checks, not to add another routine review layer.
 
-Fix root causes rather than retrying or ignoring. A flaky test is a bug — either in the test setup or in the code under test. Common causes:
-
-- Timing dependencies (use deterministic waits or mocks)
-- Shared state between tests (isolate properly)
-- External service dependencies (mock at the boundary)
-
-## Visual and Snapshot Testing
-
-**Core components should have visual tests.** Snapshot testing is your friend:
-
-- Review snapshot diffs any time you change a visual aspect of a UI — don't just check pass/fail, look at the actual images
-- On screenshot test failure, read the reference, actual, and diff images before attempting fixes
-- If a screenshot's file size changes dramatically (e.g. 404KB → 13KB), investigate before accepting
-- After modifying component rendering or CSS, proactively render and review screenshots
-
-**CLI snapshot testing**: Treat CLI output as UI. Use input/output snapshot tests to ensure the actual output stays consistent across changes.
-
-## Test Structure (Cucumber-Inspired)
-
-### Organization
-
-- **`describe()` blocks**: Focus on developer use cases and business scenarios, not just class/method names
-- **Group by behavior**: Organize tests around what the user/developer is trying to accomplish
-- **Nested contexts**: Use nested `describe()` blocks to set up different scenarios
-
-### Naming
-
-```typescript
-describe("UserStore", () => {
-  describe("new UserStore()", () => {
-    it("should create a new UserStore", () => {});
-  });
-
-  describe("load()", () => {
-    it("should load the user data", async () => {});
-    it("should only update once when called multiple times", async () => {});
-  });
-});
-```
-
-### Context-Driven Scenarios
-
-- Use scenario-based describes: "If one does not exist", "If one DOES exist"
-- Focus on user intentions: What is the developer trying to accomplish?
-- Test business rules with specific examples and concrete data
-
-### Test Comments
-
-Test comments should add context that isn't obvious from the test structure:
-
-- Explain what changes/behaviors the test is specifically verifying
-- Highlight edge cases or non-obvious scenarios
-- Clarify business rules or domain concepts
-
-Avoid restating obvious test names or explaining basic language constructs.
-
-### Setup and Mocking
-
-- Use `beforeEach()` for consistent test setup
-- Mock at the service/environment level, not deep internals
-- Create realistic test data that mirrors production scenarios
-
----
-
-> For test type definitions (unit, functional, integration, smoke, regression, fuzz), see [[Testing]]
+See the BDD skill for behavior negotiation and [[Testing]] for test-type definitions.

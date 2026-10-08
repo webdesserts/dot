@@ -3,19 +3,19 @@ name: bdd
 description: "BDD spec workflow using Gherkin syntax. Use when working with .feature files, writing specs or scenarios, negotiating feature behavior with Given/When/Then, or planning features for personal projects."
 ---
 
-## BDD Specs
+# BDD specs
 
-BDD-style specs define expected behavior using Gherkin syntax (Given/When/Then). These are the negotiation ground for how features should work.
+Use Given/When/Then scenarios to agree on meaningful behavior before implementing it. Focus on what users or API consumers can observe, including internal state that affects their experience.
 
-**Scope**: User-facing behavior — UI/UX, tool interactions, and system states that affect what users experience. This includes internal states (like sync/connection status) when they surface in the UI.
-
-**For all projects**: Every plan doc should include a BDD-style spec section. Even when specs can't be persisted, use them to negotiate feature behavior during planning. See `/plan` for how specs fit into the broader planning process.
-
-**For personal projects**: Persist specs in `specs/*.feature` files.
+BDD is useful when behavior is new, ambiguous or complex. Not every operational plan, internal edit or temporary check needs a spec section. A short statement of expected behavior may be enough.
 
 ## Workflow
 
-1. **Before implementing**: Read relevant specs to understand expected behavior
-2. **When behavior changes**: Edit the spec first — the diff shows what's changing
-3. **When edge cases are discovered**: Add them as new scenarios
-4. **Before completing**: Verify tests cover spec scenarios
+1. Read the relevant existing specs and clarify the intended change.
+2. For a behavior change, update the spec before implementation so the difference is explicit. In personal projects, keep accepted scenarios in `specs/*.feature`.
+3. Assess discovered edge cases by consequence, likelihood and cost. Add a scenario when it represents agreed behavior; otherwise record, defer or discard it rather than inventing a requirement.
+4. Verify agreed scenarios at the smallest reliable owning boundary. Use cross-system checks only where the interaction needs them.
+
+Use realistic examples; synthetic or minimized data is appropriate when it preserves the behavior under discussion. Do not duplicate every scenario across test layers.
+
+The testing skill owns risk-based check selection and stopping rules. Keep specs concise and current; do not retain obsolete scenarios as conflicting instructions.

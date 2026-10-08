@@ -8,62 +8,171 @@
     "defaultThinking": "medium",
     "agentOverrides": {
       "analyst": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "architect": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "claim-reviewer": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "coherence-reviewer": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "designer": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6-luna",
         "thinking": "medium"
       },
       "forecast-reviewer": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "hunt": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "notetaker": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6-luna",
         "thinking": "low"
       },
       "planner": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
       "worker": {
-        "skills": ["nushell"],
-        "tools": ["read", "write", "edit", "bash", "grep", "find", "ls", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "write",
+          "edit",
+          "bash",
+          "grep",
+          "find",
+          "ls",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6.1-sol",
         "thinking": "medium"
       },
@@ -74,8 +183,20 @@
         "disabled": true
       },
       "researcher": {
-        "skills": ["nushell"],
-        "tools": ["read", "write", "web_search", "fetch_content", "get_search_content", "source_check", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "write",
+          "web_search",
+          "fetch_content",
+          "get_search_content",
+          "source_check",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6-luna",
         "thinking": "medium"
       },
@@ -83,8 +204,21 @@
         "disabled": true
       },
       "scout": {
-        "skills": ["nushell"],
-        "tools": ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor", "mcp:nushell/evaluate", "mcp:nushell/command_help", "mcp:nushell/list_commands"],
+        "skills": [
+          "nushell"
+        ],
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash",
+          "write",
+          "contact_supervisor",
+          "mcp:nushell/evaluate",
+          "mcp:nushell/command_help",
+          "mcp:nushell/list_commands"
+        ],
         "model": "openai-codex/gpt-6-luna",
         "thinking": "low"
       }
@@ -95,11 +229,14 @@
       "allow": [
         "umbra/glm-5.3-flash",
         "openai-codex/gpt-6.1-sol",
-        "openai-codex/gpt-6-luna"
+        "openai-codex/gpt-6-luna",
+        "openai-codex/gpt-6-astra"
       ]
     }
   },
-  "defaultTools": ["+codemode"],
+  "defaultTools": [
+    "+codemode"
+  ],
   "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
     "openai-codex/gpt-6-astra": "medium"
@@ -126,7 +263,7 @@
     "extensions/notifications.ts",
     "extensions/mcp-profiles.ts"
   ],
-  "lastChangelogVersion": "0.87.0",
+  "lastChangelogVersion": "1.0.0",
   "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",
