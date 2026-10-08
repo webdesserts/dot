@@ -3,6 +3,7 @@ default_mode "locked"
 on_force_close "detach"
 
 theme "neapolitan-light"
+simplified_ui true
 
 // Match the Neapolitan light palette used by Pi and iTerm.
 themes {
