@@ -45,7 +45,7 @@ When proposing changes (or grading proposals), keep these in mind:
 - **Anchor to the destination, not the journey.** Code comments describe what the code does now, not what it used to do. Tests assert what the code should produce, not what today's specific bug produced.
 - **Avoid string literals as references.** When a string identifies a categorical value with a canonical definition (status name, event type, kind, tag), name it once (`const`, enum variant) and reference the symbol everywhere. Fine for inline values, test fixtures, and the canonical definition site itself.
 - **Communicate breaking changes.** Call them out. If unsure whether a migration is needed, ask. Greenfield apps can break cleanly; widely-used libraries cannot.
-- **Keep source files small.** Target under 1,000 lines per source file; hard cap at 2,000. Above the cap, every reviewer pass re-reads the whole file — token cost compounds. If a file you're touching is already over, prefer extracting tests or peeling off a cohesive submodule rather than adding more.
+- **Keep source files small.** Target under 1,000 lines per source file; hard cap at 2,000. Above the cap, every reviewer pass re-reads the whole file — token cost compounds. If a file you're touching is already over, prefer extracting tests or peeling off a cohesive submodule rather than adding more. Estimate normally formatted implementation and complete tests with realistic margin. Compressed statements or omitted checks are not evidence that a change fits; propose a coherent split or seek a revised size constraint instead.
 
 ## Before proposing a solution, look for…
 
