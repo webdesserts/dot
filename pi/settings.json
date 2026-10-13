@@ -1,10 +1,10 @@
 {
-  "defaultProvider": "openai-codex",
+  "defaultProvider": "openai",
   "defaultModel": "gpt-6.1-sol",
   "subagents": {
     "disableBuiltins": true,
     "defaultSubagentOnlyExtensions": [],
-    "defaultModel": "openai-codex/gpt-6-luna",
+    "defaultModel": "openai/gpt-6-luna",
     "defaultThinking": "medium",
     "agentOverrides": {
       "analyst": {
@@ -21,7 +21,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "architect": {
@@ -38,7 +38,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "claim-reviewer": {
@@ -54,7 +54,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "coherence-reviewer": {
@@ -71,7 +71,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "designer": {
@@ -87,7 +87,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6-luna",
+        "model": "openai/gpt-6-luna",
         "thinking": "medium"
       },
       "forecast-reviewer": {
@@ -104,7 +104,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "hunt": {
@@ -121,7 +121,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "notetaker": {
@@ -137,7 +137,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6-luna",
+        "model": "openai/gpt-6-luna",
         "thinking": "low"
       },
       "planner": {
@@ -154,7 +154,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "worker": {
@@ -173,7 +173,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6.1-sol",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "delegate": {
@@ -197,7 +197,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6-luna",
+        "model": "openai/gpt-6-luna",
         "thinking": "medium"
       },
       "reviewer": {
@@ -219,7 +219,7 @@
           "mcp:nushell/command_help",
           "mcp:nushell/list_commands"
         ],
-        "model": "openai-codex/gpt-6-luna",
+        "model": "openai/gpt-6-luna",
         "thinking": "low"
       }
     },
@@ -228,9 +228,9 @@
       "strict": true,
       "allow": [
         "umbra/glm-5.3-flash",
-        "openai-codex/gpt-6.1-sol",
-        "openai-codex/gpt-6-luna",
-        "openai-codex/gpt-6-astra"
+        "openai/gpt-6.1-sol",
+        "openai/gpt-6-luna",
+        "openai/gpt-6-astra"
       ]
     }
   },
@@ -239,7 +239,7 @@
   ],
   "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
-    "openai-codex/gpt-6-astra": "medium"
+    "openai/gpt-6-astra": "medium"
   },
   "packages": [
     {
