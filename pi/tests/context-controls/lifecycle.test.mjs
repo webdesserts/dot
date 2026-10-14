@@ -250,6 +250,53 @@ test("real parent session: sole compact completes before continuing the existing
 	assert.deepEqual(reasons, ["manual"], "the tool, not auto-compaction, produced the compaction entry");
 });
 
+test("a newer deferred user request consumes restoration before its first response without a stale wake", { timeout: 10_000 }, async (t) => {
+	const faux = fauxProvider({ models: [{ id: "faux-delayed-user", contextWindow: 200_000, maxTokens: 4_000 }] });
+	let firstPostCompactContext;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("compact", {})]),
+		(context) => { firstPostCompactContext = context; return fauxAssistantMessage("Newer user task completed."); },
+		fauxAssistantMessage("Unwanted stale wake."),
+	]);
+	let enterCompaction;
+	let releaseCompaction;
+	const entered = new Promise((resolve) => { enterCompaction = resolve; });
+	const gate = new Promise((resolve) => { releaseCompaction = resolve; });
+	const { session, seedContext } = await makeHermeticSession(t, {
+		faux,
+		extensionPaths: { files: ["context-controls.ts"], paths: ["context-controls.ts"] },
+		extensionFactories: [(pi) => {
+			pi.on("session_before_compact", async (event) => {
+				enterCompaction();
+				await gate;
+				return { compaction: {
+					summary: "Preserve the approved task.",
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+				} };
+			});
+		}],
+	});
+	seedContext();
+	const prompting = session.prompt("Compact before continuing.");
+	await entered;
+	// AgentSession defers this while agent_settled is held by compaction.
+	await session.prompt("NEWER_USER_REQUEST: finish this task instead.");
+	releaseCompaction();
+	await prompting;
+	const context = JSON.stringify(firstPostCompactContext);
+	assert.match(context, /NEWER_USER_REQUEST/);
+	assert.ok(context.includes(RESTORATION_WORDING), "restoration precedes the newer task's first model response");
+	assert.equal(faux.state.callCount, 2, "newer user input replaces the autonomous wake, rather than preceding it");
+	assert.equal(session.getLastAssistantText(), "Newer user task completed.");
+	assert.deepEqual(session.sessionManager.getEntries().filter((e) => e.message?.role === "user")
+		.map((e) => e.message.content.map((c) => c.text ?? "").join(""))
+		.filter((text) => !text.includes("filler context")), ["Compact before continuing.", "NEWER_USER_REQUEST: finish this task instead."]);
+});
+
+const RESTORATION_WORDING = "[system] Your context has been compacted, please review the summary, validate it against the current world state, and load any relevant skills and notes that you will need to continue.";
+const CONTINUATION_NOTICE = "[system] Harness continuation after compaction.";
+
 test("real parent continuation receives the existing skills and Working Memory reminder once", { timeout: 10_000 }, async (t) => {
 	const ownedHome = await mkdtemp(join(tmpdir(), "cc-harness-home-"));
 	const originalHome = process.env.HOME;
@@ -281,7 +328,16 @@ test("real parent continuation receives the existing skills and Working Memory r
 	assert.equal(faux.state.callCount, 2, "the idle snapshot does not create a second continuation");
 	assert.match(context, /Context was compacted\. Please load Nu and codemode/);
 	assert.match(context, /CONTINUATION_MEMORY_MARKER/);
-	assert.match(context, /Continue thinking about and doing what you were doing\./);
+	assert.ok(context.includes(RESTORATION_WORDING));
+	assert.ok(context.includes(CONTINUATION_NOTICE));
+	assert.doesNotMatch(context, /Continue thinking about and doing what you were doing\./);
+	const entries = session.sessionManager.getEntries();
+	const notices = entries.filter((e) => e.type === "custom_message" && e.customType === "context-controls-restoration");
+	assert.equal(notices.length, 1);
+	assert.equal(notices[0].content[0].text, RESTORATION_WORDING, "the preferred wording remains typed custom context");
+	assert.equal(entries.filter((e) => e.type === "custom_message" && e.customType === "context-controls-resume").length, 0, "no nested custom wake run");
+	assert.equal(entries.filter((e) => e.message?.role === "user" && e.message.content[0]?.text === CONTINUATION_NOTICE).length, 1, "owner-approved wake persists in user role, labeled as harness control");
+	assert.ok(!JSON.stringify(entries).includes("context-controls-resume:"), "opaque tokens never reach history");
 });
 
 test("real session: compact batched with a sibling is rejected and the sibling still runs (exact faux call count)", async (t) => {
@@ -403,10 +459,11 @@ for (const mode of ["background", "foreground"]) {
 test(`native child runner (${mode}): usage and compact are available, compaction completes before the assignment`, { timeout: 10_000 }, async (t) => {
 	const faux = fauxProvider({ models: [{ id: "faux-child-context", contextWindow: 200_000, maxTokens: 4_000 }] });
 	let finalContext;
+	let resumedContext;
 	faux.setResponses([
 		fauxAssistantMessage([fauxToolCall("usage", {})]),
 		fauxAssistantMessage([fauxToolCall("compact", { summaryFocus: "Preserve the fixture assignment." })]),
-		fauxAssistantMessage([fauxToolCall("usage", {})]),
+		(context) => { resumedContext = context; return fauxAssistantMessage([fauxToolCall("usage", {})]); },
 		(context) => { finalContext = context; return fauxAssistantMessage("Fixture assignment completed after compaction."); },
 	]);
 	const { session, seedContext } = await makeHermeticSession(t, {
@@ -426,11 +483,15 @@ test(`native child runner (${mode}): usage and compact are available, compaction
 	assert.deepEqual(reasons, ["manual"], "tool-requested compaction, not automatic threshold recovery");
 	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 1);
 	assert.match(JSON.stringify(finalContext), /Last compaction: SUCCESS/);
+	assert.ok(JSON.stringify(resumedContext).includes(RESTORATION_WORDING), "the first post-compaction child response gets restoration guidance");
+	const entries = session.sessionManager.getEntries();
+	assert.equal(entries.filter((e) => e.message?.role === "user" && e.message.content[0]?.text === CONTINUATION_NOTICE).length, 1);
+	assert.ok(!JSON.stringify(entries).includes("context-controls-resume:"));
 	assert.ok(disposed, "the runner closes the session only after the post-compaction assignment finishes");
 });
 }
 
-test("native child runner: failed compaction reports failure and continues without retrying it", { timeout: 10_000 }, async (t) => {
+test("native child runner: failed compaction reports failure without restarting the assignment", { timeout: 10_000 }, async (t) => {
 	const faux = fauxProvider({ models: [{ id: "faux-child-too-small", contextWindow: 200_000, maxTokens: 4_000 }] });
 	let finalContext;
 	faux.setResponses([
@@ -444,10 +505,13 @@ test("native child runner: failed compaction reports failure and continues witho
 	});
 	const { result } = await runHermeticChild(session);
 	assert.equal(result.exitCode, 0, result.error);
-	assert.equal(faux.state.callCount, 3);
+	assert.equal(faux.state.callCount, 1, "failed compaction does not authorize a continuation");
 	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 0);
-	assert.match(JSON.stringify(finalContext), /Last compaction: FAILED/);
-	assert.match(result.finalOutput, /no task completion claimed/);
+	assert.equal(finalContext, undefined, "scripted post-failure responses never ran");
+	const entries = JSON.stringify(session.sessionManager.getEntries());
+	assert.match(entries, /Compaction FAILED/);
+	assert.ok(!entries.includes(RESTORATION_WORDING), "failure never claims restoration");
+	assert.doesNotMatch(result.finalOutput ?? "", /no task completion claimed/);
 });
 
 test("native child runner: batched compact leaves sibling work intact and never dispatches", { timeout: 10_000 }, async (t) => {

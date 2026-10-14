@@ -9,8 +9,8 @@
  * extension transpiles, registers the usage/compact tools with the settled
  * schemas, that usage() reports truthfully through the real execute path,
  * that compact() only accepts a sole call and carries terminate:true, that
- * batched calls are rejected, and that alerts are delivered through the real
- * before_agent_start handler without sendUserMessage.
+ * batched calls are rejected, alerts project through the context handler,
+ * and an owned wake transforms into a labeled user-role continuation.
  *
  * Run: node --test pi/tests/context-controls/loader.test.mjs  (repo root)
  */
@@ -70,10 +70,9 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	assert.ok(extension.handlers.has("context"), "request-context handler registered");
 	assert.ok(extension.handlers.has("agent_settled"), "dispatch handler registered");
 	assert.ok(extension.handlers.has("session_compact"), "native compaction handler registered");
-	// Stock no-turn delivery only: no tool-result mutation, no
-	// before_agent_start fallback.
 	assert.equal(extension.handlers.get("tool_result"), undefined, "tool results are never mutated");
-	assert.equal(extension.handlers.get("before_agent_start"), undefined, "no fallback delivery channel");
+	assert.ok(extension.handlers.has("before_agent_start"), "a real run consumes restoration");
+	assert.ok(extension.handlers.has("input"), "owned wake tokens are transformed or dropped");
 
 	// TypeBox schemas: no stale/extra parameters.
 	assert.deepEqual(toolDef.parameters.properties, {}, "usage takes no parameters");
@@ -110,15 +109,24 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	const dup = await compactDef.execute("call-2", {}, undefined, undefined, ctx);
 	assert.equal(dup.details.duplicate, true, "in-flight duplicate refused");
 
-	// A batched compact call is rejected through the real execute path (the
-	// first request's in-flight guard is resolved first via its terminal
-	// callback, mirroring a completed compaction).
+	// Native success delivers restoration before the terminal callback.
+	extension.handlers.get("session_compact")[0]({ compactionEntry: { id: "loader-compaction", tokensBefore: 100_000 } }, ctx);
 	state.compactCalls[0].onComplete({ tokensBefore: 100_000, estimatedTokensAfter: 10_000 });
 	await settling;
 	assert.equal(continuations.length, 1, "exactly one continuation of the existing task");
-	assert.equal(continuations[0][0], "Continue thinking about and doing what you were doing.");
-	assert.equal(outcomes.length, 1);
+	const token = continuations[0][0];
+	assert.match(token, /^context-controls-resume:/);
+	const input = extension.handlers.get("input")[0];
+	assert.equal(input({ source: "extension", text: "unrelated extension input" }, ctx), undefined);
+	assert.equal(input({ source: "interactive", text: token }, ctx), undefined, "genuine user input is not intercepted");
+	assert.deepEqual(input({ source: "extension", text: token }, ctx), {
+		action: "transform", text: "[system] Harness continuation after compaction.",
+	});
+	assert.deepEqual(input({ source: "extension", text: token }, ctx), { action: "handled" }, "a repeated token cannot wake again");
+	assert.equal(outcomes.length, 2, "only no-turn outcome and restoration custom messages");
 	assert.match(outcomes[0].content[0].text, /completed successfully/);
+	assert.equal(outcomes[1].customType, "context-controls-restoration");
+	assert.match(outcomes[1].content[0].text, /^\[system\] Your context has been compacted,/);
 	extension.handlers.get("message_end")[0]({
 		message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "compact" }, { type: "toolCall", id: "b", name: "bash" }] },
 	}, ctx);

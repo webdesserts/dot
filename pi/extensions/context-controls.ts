@@ -11,8 +11,9 @@
  * core ends the run after a batch only when EVERY call sets it
  * (pi-agent-core tool-placement.js) — so compaction starts at settle without
  * killing sibling work. Settlement is held through the terminal compact
- * callback, then one continuation of the existing task is queued. Abort or
- * session replacement never restarts work.
+ * callback, then a successful compaction queues a coalescible continuation
+ * of the existing task. Failed/aborted compaction or observed session
+ * replacement does not restart work.
  * Duplicate/in-flight guards, stale-callback fences by
  * session identity + generation, and requests are invalidated on session or
  * branch replacement. Fulfillment is correlated by a request-time branch
@@ -26,10 +27,15 @@
  * reload/resume. Crossings coalesce into one notice projected through the
  * stock context hook into the request being built. Alerts create no turn,
  * mutate no tool result and do not accumulate in session history. Confirmed
- * compaction outcomes use sendMessage with triggerTurn:false. No user
- * messages or independent continuation loop are generated.
+ * compaction outcomes and restoration guidance use sendMessage with
+ * triggerTurn:false. A private extension-origin input token checks whether
+ * restoration still needs an autonomous wake after earlier settled input
+ * drains. A valid token transforms into a labeled user-role harness control
+ * message within the original awaited prompt; stale tokens are handled.
+ * The opaque token is never intentionally added to conversation history.
  */
 import { Type } from "typebox";
+import { randomUUID } from "node:crypto";
 
 /** Alert levels, as percentages of the context window. */
 const LEVELS = [
@@ -38,6 +44,9 @@ const LEVELS = [
 ];
 
 const ENTRY_TYPE = "context-controls-state";
+// The owner-selected [system] label is provenance text, not a system role.
+const RESTORATION_NOTICE = "[system] Your context has been compacted, please review the summary, validate it against the current world state, and load any relevant skills and notes that you will need to continue.";
+const CONTINUATION_NOTICE = "[system] Harness continuation after compaction.";
 
 const fmtK = (tokens) =>
 	tokens >= 1000 ? `${Math.round(tokens / 100) / 10}k` : String(tokens);
@@ -53,6 +62,11 @@ export default function (pi) {
 	let lastCompaction = null; // latest confirmed truth (success/error/abort)
 	let notifiedKey = null; // dedupe: one outcome announcement per operation
 	let inFlightRequest = null; // the request object while dispatched
+	let restoration = null;
+	// A runtime-private namespace lets stale owned tokens be dropped without
+	// retaining a growing collection of old requests or intercepting other input.
+	const resumePrefix = `context-controls-resume:${randomUUID()}:`;
+	let resumeToken = null;
 
 	// ── alert state ──
 	let lastPercent = null; // consecutive-observation baseline
@@ -84,6 +98,8 @@ export default function (pi) {
 		pending = null;
 		inFlight = false;
 		inFlightRequest = null;
+		restoration = null;
+		resumeToken = null;
 	};
 
 	const recordFailure = (outcome, detail) => {
@@ -399,22 +415,48 @@ export default function (pi) {
 			content: [{ type: "text", text: notice }], display: false, timestamp: Date.now(),
 		}] };
 	});
+	pi.on("before_agent_start", () => {
+		// Any real run (including a newer user request) consumes the need for
+		// an autonomous wake. The durable notice is already in its context.
+		restoration = null;
+		resumeToken = null;
+	});
+	pi.on("input", (event, ctx) => {
+		if (event.source !== "extension" || !event.text.startsWith(resumePrefix)) return;
+		// An older owned token must not consume a newer request's wake.
+		if (event.text !== resumeToken) return { action: "handled" };
+		const requirement = restoration;
+		const canResume = requirement && requirement.owner === sessionOwner(ctx) &&
+			requirement.generation === generation && lastCompaction?.outcome === "success";
+		resumeToken = null;
+		if (!canResume) return { action: "handled" };
+		restoration = null;
+		// Keep this run inside AgentSession's awaited deferred prompt. Starting
+		// a separate sendMessage run here would let the parent/child finish early.
+		return { action: "transform", text: CONTINUATION_NOTICE };
+	});
 	pi.on("agent_settled", async (event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
 		if (event.aborted) {
 			pending = null;
+			restoration = null;
+			resumeToken = null;
 			return;
 		}
 		const completion = dispatchPending(ctx);
 		const request = completion && await completion;
 		if (request && request.owner === sessionOwner(currentCtx) &&
-			request.generation === generation && lastCompaction?.outcome !== "aborted") {
-			// Recheck ownership after the await: replacement can happen after
-			// the callback resolves but before continuation is dispatched.
-			pi.sendUserMessage("Continue thinking about and doing what you were doing.");
+			request.generation === generation && lastCompaction?.outcome === "success" &&
+			restoration?.generation === request.generation) {
+			// Settled actions are awaited in order by AgentSession. A newer
+			// deferred user run may finish before this token reaches input;
+			// recheck there, rather than enqueueing an unconditional model run.
+			resumeToken = `${resumePrefix}${request.generation}`;
+			pi.sendUserMessage(resumeToken);
 		}
 	});
-	pi.on("session_compact", (event, _ctx) => {
+	pi.on("session_compact", (event, ctx) => {
+		currentCtx = ctx ?? currentCtx;
 		// Native truth (ours or auto). Clears any pending request so a queued
 		// dispatch never double-compacts, and starts a NEW alert epoch by the
 		// confirmed entry identity.
@@ -430,6 +472,9 @@ export default function (pi) {
 		inFlightRequest = null;
 		inFlight = false;
 		notifyOutcome(key, lastCompaction);
+		restoration = { owner: sessionOwner(), generation };
+		pi.sendMessage({ customType: "context-controls-restoration", display: false,
+			content: [{ type: "text", text: RESTORATION_NOTICE }] }, { triggerTurn: false });
 		// New epoch by confirmed entry identity: levels may announce again as
 		// usage regrows. A stale pre-compaction pressure notice is dropped.
 		deliveredLevels = new Set();
@@ -540,7 +585,7 @@ export default function (pi) {
 							"automatically as soon as the run fully settles. Do not start new work in this turn. " +
 							"This acceptance is not success: the confirmed outcome (success, failure, or abort) is reported " +
 							"by the usage() tool. After the terminal compaction callback, the session continues its existing " +
-							"approved task without needing a heartbeat. An aborted compaction or replaced session does not restart work.",
+							"approved task without needing a heartbeat. A failed/aborted compaction or replaced session does not restart work.",
 					},
 				],
 				details: { ok: true, accepted: true, dispatched: false, terminate: true },

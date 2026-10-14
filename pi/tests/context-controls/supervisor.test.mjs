@@ -29,7 +29,7 @@ function fixture() {
 	const handlers = new Map();
 	const tools = new Map();
 	const sent = []; // Task continuations; pressure alerts must not add any.
-	const sentCustom = []; // Durable compaction outcomes only.
+	const sentCustom = []; // Durable no-turn outcomes and restoration notices.
 	const projected = [];
 	const observedNotices = [];
 	const clock = { now: T0, seq: 0 };
@@ -66,6 +66,7 @@ function fixture() {
 	};
 	vm.runInNewContext(`${source}\nsetup(pi);`, {
 		pi, process: { env: {} }, console: { error() {} }, Date: FakeDate,
+		randomUUID: () => 'owned-fixture',
 		Type: { Object: v => v, String: v => v, Optional: v => v },
 	});
 	const ctx = {
@@ -163,9 +164,8 @@ test('alerts project into context without sending messages or creating turns', (
 test('context delivery reaches the current request without tool-result mutation', () => {
 	const f = fixture();
 	f.event('session_start', { reason: 'startup' }, f.ctx);
-	// No tool_result / before_agent_start delivery machinery remains.
 	assert.equal(f.handlers.get('tool_result'), undefined, 'tool results are never mutated');
-	assert.equal(f.handlers.get('before_agent_start'), undefined, 'no before_agent_start fallback needed');
+	f.event('before_agent_start'); // restoration consumption does not deliver pressure alerts
 	f.observe(50_000);
 	f.observe(130_000); // 65%
 	assert.equal(f.projected.length, 1, 'notice included in the crossing request');
@@ -273,6 +273,64 @@ test('continuation is fenced if the branch changes after the terminal callback',
 	f.event('session_before_tree');
 	await settling;
 	assert.equal(f.sent.length, 0, 'resolved callbacks cannot restart a replaced branch');
+});
+
+async function queueSuccessfulWake(f) {
+	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	const settling = f.event('agent_settled');
+	f.event('session_compact', { compactionEntry: { id: `cmp-${f.state.compactCalls.length}` } });
+	f.state.compactCalls.at(-1).options.onComplete({ tokensBefore: 100_000 });
+	await settling;
+	return f.sent.at(-1)[0];
+}
+
+test('owned input tokens transform once, leaving user and other-extension input untouched', async () => {
+	const f = fixture();
+	f.event('session_start');
+	const token = await queueSuccessfulWake(f);
+	for (const source of ['interactive', 'rpc']) {
+		assert.equal(f.event('input', { source, text: token }), undefined);
+	}
+	assert.equal(f.event('input', { source: 'extension', text: 'another extension request' }), undefined);
+	assert.equal(f.event('input', { source: 'extension', text: 'context-controls-resume:foreign-runtime:1' }), undefined);
+	const transformed = f.event('input', { source: 'extension', text: token });
+	assert.equal(transformed.action, 'transform');
+	assert.equal(transformed.text, '[system] Harness continuation after compaction.');
+	assert.equal(f.event('input', { source: 'extension', text: token }).action, 'handled');
+	assert.ok(f.sentCustom.every((entry) => entry.options.triggerTurn === false), 'input never starts a nested custom run');
+});
+
+test('consumption, ownership, generation, cancellation and replacement fence queued input tokens', async () => {
+	for (const boundary of ['consumed', 'owner', 'input-owner', 'generation', 'abort', 'failure', 'branch', 'switch', 'fork', 'shutdown', 'session-start']) {
+		const f = fixture();
+		f.event('session_start');
+		const token = await queueSuccessfulWake(f);
+		let inputCtx = f.ctx;
+		switch (boundary) {
+			case 'consumed': f.event('before_agent_start'); break;
+			case 'owner': f.state.sessionId = 'session-B'; break;
+			case 'input-owner': inputCtx = { ...f.ctx, sessionManager: { getSessionId: () => 'different-input-owner' } }; break;
+			case 'generation': await f.tools.get('compact').execute('new', {}, undefined, undefined, f.ctx); break;
+			case 'abort': await f.event('agent_settled', { aborted: true }); break;
+			case 'failure': f.event('session_compact_failed', { aborted: true }); break;
+			case 'branch': f.event('session_before_tree'); break;
+			case 'switch': f.event('session_before_switch'); break;
+			case 'fork': f.event('session_before_fork'); break;
+			case 'shutdown': f.event('session_shutdown'); break;
+			case 'session-start': f.event('session_start', { reason: 'new' }); break;
+		}
+		assert.equal(f.event('input', { source: 'extension', text: token }, inputCtx).action, 'handled', boundary);
+	}
+});
+
+test('a stale owned token does not consume a newer generation wake', async () => {
+	const f = fixture();
+	f.event('session_start');
+	const old = await queueSuccessfulWake(f);
+	const current = await queueSuccessfulWake(f);
+	assert.notEqual(old, current);
+	assert.equal(f.event('input', { source: 'extension', text: old }).action, 'handled');
+	assert.equal(f.event('input', { source: 'extension', text: current }).action, 'transform');
 });
 
 test('an aborted run discards its pending compaction without starting another turn', async () => {
