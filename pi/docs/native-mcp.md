@@ -65,7 +65,7 @@ Pi-subagents supports project-scoped overrides of existing roles. Where a task r
   "subagents": {
     "agentOverrides": {
       "worker": { "excludeTools": ["bash"] },
-      "forecast-reviewer": { "excludeTools": ["bash"] }
+      "scout": { "excludeTools": ["bash"] }
     }
   }
 }
