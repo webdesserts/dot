@@ -18,4 +18,10 @@ BDD is useful when behavior is new, ambiguous or complex. Not every operational 
 
 Use realistic examples; synthetic or minimized data is appropriate when it preserves the behavior under discussion. Do not duplicate every scenario across test layers.
 
+## Challenge the agreement
+
+The orchestrator negotiates behavior with Michael; a Worker, Scout or Claim Reviewer can help expose gaps. Ground questions in existing scenarios, source and realistic use. Look for contradictory expectations, implicit assumptions and consequential empty/error/concurrent/permission cases. Label a missing requirement as a question until the owner agrees on the behavior; do not turn every conceivable edge into a new criterion.
+
+Separate blocking contradictions, meaningful ambiguity and optional improvements. Explain the consumer consequence and smallest clarification. When the remaining critique is cosmetic or speculative, say the behavior is clear enough to proceed rather than manufacturing another refinement round. No separate Analyst seat or mandatory adversarial stage is required.
+
 The testing skill owns risk-based check selection and stopping rules. Keep specs concise and current; do not retain obsolete scenarios as conflicting instructions.
