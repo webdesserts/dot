@@ -59,7 +59,9 @@ function fakeCtx(state) {
 test("Pi loads the dependency-free extension with usage/compact tools", async (t) => {
 	const loaded = await isolatedExtension(t);
 	const outcomes = [];
+	const continuations = [];
 	loaded.runtime.sendMessage = (message) => outcomes.push(message);
+	loaded.runtime.sendUserMessage = (...args) => continuations.push(args);
 	const extension = loaded.extensions[0];
 	const toolDef = extension.tools.get("usage")?.definition;
 	const compactDef = extension.tools.get("compact")?.definition;
@@ -102,8 +104,9 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	assert.equal(accepted.details.accepted, true);
 	assert.equal(accepted.terminate, true);
 	assert.equal(state.compactCalls.length, 0, "no inline native compaction");
-	extension.handlers.get("agent_settled")[0]({}, ctx);
+	const settling = extension.handlers.get("agent_settled")[0]({}, ctx);
 	assert.equal(state.compactCalls.length, 1, "dispatched at agent_settled");
+	assert.equal(continuations.length, 0, "no continuation before compaction finishes");
 	const dup = await compactDef.execute("call-2", {}, undefined, undefined, ctx);
 	assert.equal(dup.details.duplicate, true, "in-flight duplicate refused");
 
@@ -111,6 +114,9 @@ test("Pi loads the dependency-free extension with usage/compact tools", async (t
 	// first request's in-flight guard is resolved first via its terminal
 	// callback, mirroring a completed compaction).
 	state.compactCalls[0].onComplete({ tokensBefore: 100_000, estimatedTokensAfter: 10_000 });
+	await settling;
+	assert.equal(continuations.length, 1, "exactly one continuation of the existing task");
+	assert.equal(continuations[0][0], "Continue thinking about and doing what you were doing.");
 	assert.equal(outcomes.length, 1);
 	assert.match(outcomes[0].content[0].text, /completed successfully/);
 	extension.handlers.get("message_end")[0]({

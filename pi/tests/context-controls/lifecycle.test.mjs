@@ -16,12 +16,11 @@
  * - cleanup disposes the session and kills any surviving notification worker
  *   spawned under the owned temp dirs.
  *
- * Proven here against the real session: a SOLE compact() tool call carries
- * terminate:true, ends the run after the batch, compaction is dispatched at
- * agent_settled and CONFIRMED via a deterministic session_before_compact
- * handler (no LLM summarization call — exact faux call count asserted);
- * a compact() call batched with a sibling tool call is rejected mid-run while
- * the sibling still executes.
+ * A sole compact call ends its low-level run, completes native compaction,
+ * then continues the same parent or child activity before prompt settlement.
+ * The installed child runner verifies delivery/disposal, failed compaction,
+ * sibling safety and cancellation. Compaction summaries are deterministic;
+ * faux call counts prove which responses actually ran.
  *
  * Run: node --test pi/tests/context-controls/lifecycle.test.mjs  (repo root)
  */
@@ -29,10 +28,11 @@
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { registerHooks } from "node:module";
 import * as hermetic from "./hermetic.mjs";
 
 const sdkRoot = process.env.PI_SDK_ROOT ?? join(
@@ -44,6 +44,21 @@ const { fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } = await imp
 );
 const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, getAgentDir, ModelRuntime } =
 	await import(pathToFileURL(join(sdkRoot, "dist/index.js")).href);
+
+const subagentsRoot = process.env.PI_SUBAGENTS_ROOT ?? join(homedir(), ".pi/agent/npm/node_modules/pi-subagents");
+const { resolveHostPeerAliases } = await import(pathToFileURL(join(subagentsRoot, "src/runs/background/runner-aliases.js")).href);
+const { aliases, missing } = resolveHostPeerAliases(sdkRoot);
+assert.deepEqual(missing, [], "installed child runner's host peer dependencies resolve");
+// Use the runner's own host aliases, only while importing its consumer graph.
+const peerHook = registerHooks({ resolve: (specifier, context, next) =>
+	next(aliases[specifier] ? pathToFileURL(aliases[specifier]).href : specifier, context),
+});
+let runChildSession;
+try {
+	({ runChildSession } = await import(pathToFileURL(join(subagentsRoot, "src/runs/background/run-child-session.js")).href));
+} finally {
+	peerHook.deregister();
+}
 
 // Kill any notification worker spawned under `dir` (the real worker is a
 // child process; tests must not leave survivors behind).
@@ -94,11 +109,12 @@ async function awaitWorkerExit(dir, ms = 5000) {
 	}
 }
 
-async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories }) {
+async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories, child = false, nativeChildPrompt = false }) {
 	const ownedAgentDir = await mkdtemp(join(tmpdir(), "cc-agentdir-"));
 	const ownedCwd = await mkdtemp(join(tmpdir(), "cc-cwd-"));
 	const savedChildEnv = process.env.PI_SUBAGENT_CHILD;
-	delete process.env.PI_SUBAGENT_CHILD;
+	if (child) process.env.PI_SUBAGENT_CHILD = "1";
+	else delete process.env.PI_SUBAGENT_CHILD;
 	t.after(async () => {
 		if (savedChildEnv === undefined) delete process.env.PI_SUBAGENT_CHILD;
 		else process.env.PI_SUBAGENT_CHILD = savedChildEnv;
@@ -124,6 +140,7 @@ async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories
 		noPromptTemplates: true,
 		noThemes: true,
 		noContextFiles: true,
+		...(nativeChildPrompt ? { systemPrompt: '<active_agent name="context-fixture"/>\n\nDeliver only the assigned fixture report.' } : {}),
 	});
 	await resourceLoader.reload();
 	// Resource exclusions/allowlist: exactly the owned extensions loaded —
@@ -167,9 +184,9 @@ async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories
 		ownedAgentDir,
 		ownedCwd,
 		seedContext: () => {
-			// Two large turns so deterministic compaction has a non-empty
-			// summarize set (the newest turn stays within keep-recent).
-			for (const filler of ["Old filler context. ".repeat(60_000), "Recent filler context. ".repeat(60_000)]) {
+			// Enough history for manual compaction, below the native automatic
+			// threshold so auto-compaction cannot masquerade as tool dispatch.
+			for (const filler of ["Old filler context. ".repeat(4_000), "Recent filler context. ".repeat(4_000)]) {
 				session.sessionManager.appendMessage({
 					role: "user",
 					content: [{ type: "text", text: filler }],
@@ -189,13 +206,11 @@ async function waitUntil(fn, ms = 10_000) {
 	}
 }
 
-test("real session: sole compact call terminates the run and compaction is confirmed (exact faux call count)", async (t) => {
+test("real parent session: sole compact completes before continuing the existing task (exact faux call count)", async (t) => {
 	const faux = fauxProvider({ models: [{ id: "faux-lifecycle", contextWindow: 200_000, maxTokens: 4_000 }] });
 	faux.setResponses([
 		fauxAssistantMessage([fauxText("Requesting compaction."), fauxToolCall("compact", {})]),
-		// Not consumed in this test: the run must terminate without another
-		// model response after the terminating compact call.
-		fauxAssistantMessage("should never be reached"),
+		fauxAssistantMessage("Parent assignment continued after compaction."),
 	]);
 
 	const dir = await mkdtemp(join(tmpdir(), "cc-lifecycle-"));
@@ -219,6 +234,8 @@ test("real session: sole compact call terminates the run and compaction is confi
 		],
 	});
 	seedContext();
+	const reasons = [];
+	session.subscribe((event) => { if (event.type === "compaction_start") reasons.push(event.reason); });
 
 	await session.prompt("Please compact the session now.");
 
@@ -228,9 +245,43 @@ test("real session: sole compact call terminates the run and compaction is confi
 	assert.ok(settled, "a real CompactionEntry was appended after the accepted request");
 	const entry = session.sessionManager.getEntries().find((e) => e.type === "compaction");
 	assert.equal(entry.summary, "deterministic lifecycle summary", "extension-provided deterministic compaction ran");
-	// EXACT faux call count: the compact turn only — the run terminated after
-	// the batch instead of continuing to the second scripted response.
-	assert.equal(faux.state.callCount, 1, "exactly one model call (the compact turn)");
+	assert.equal(faux.state.callCount, 2, "the parent continued only after compaction completed");
+	assert.equal(session.getLastAssistantText(), "Parent assignment continued after compaction.");
+	assert.deepEqual(reasons, ["manual"], "the tool, not auto-compaction, produced the compaction entry");
+});
+
+test("real parent continuation receives the existing skills and Working Memory reminder once", { timeout: 10_000 }, async (t) => {
+	const ownedHome = await mkdtemp(join(tmpdir(), "cc-harness-home-"));
+	const originalHome = process.env.HOME;
+	const originalIdentity = process.env.AUTONOMY_AGENT_ID;
+	process.env.HOME = ownedHome;
+	process.env.AUTONOMY_AGENT_ID = "context-fixture";
+	t.after(async () => {
+		if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
+		if (originalIdentity === undefined) delete process.env.AUTONOMY_AGENT_ID; else process.env.AUTONOMY_AGENT_ID = originalIdentity;
+		await rm(ownedHome, { recursive: true, force: true });
+	});
+	const memoryDir = join(ownedHome, "notes/agents/context-fixture");
+	await mkdir(memoryDir, { recursive: true });
+	await writeFile(join(memoryDir, "Working Memory — context-fixture.md"), "Preserve fixture focus: CONTINUATION_MEMORY_MARKER.");
+	const faux = fauxProvider({ models: [{ id: "faux-parent-harness", contextWindow: 200_000, maxTokens: 4_000 }] });
+	let continuationContext;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("compact", {})]),
+		(context) => { continuationContext = context; return fauxAssistantMessage("Picked up after context restoration."); },
+	]);
+	const { session, seedContext } = await makeHermeticSession(t, {
+		faux,
+		extensionPaths: { files: ["context-controls.ts", "harness-context.ts"], paths: ["context-controls.ts", "harness-context.ts"] },
+		extensionFactories: [deterministicCompaction],
+	});
+	seedContext();
+	await session.prompt("Compact, then pick up where you left off.");
+	const context = JSON.stringify(continuationContext);
+	assert.equal(faux.state.callCount, 2, "the idle snapshot does not create a second continuation");
+	assert.match(context, /Context was compacted\. Please load Nu and codemode/);
+	assert.match(context, /CONTINUATION_MEMORY_MARKER/);
+	assert.match(context, /Continue thinking about and doing what you were doing\./);
 });
 
 test("real session: compact batched with a sibling is rejected and the sibling still runs (exact faux call count)", async (t) => {
@@ -309,4 +360,153 @@ test('the immediately next text-only model response receives a crossing alert', 
 	assert.ok(entries.filter((e) => e.message?.role === 'toolResult').every(
 		(e) => !JSON.stringify(e.message.content).includes('Context pressure:'),
 	), 'tool output is not rewritten to carry alerts');
+});
+
+// Exercise the installed child runner's settlement/disposal boundary around
+// a real, hermetically loaded AgentSession, without a provider or MCP launch.
+async function runHermeticChild(session, { registerStop } = {}) {
+	let disposed = false;
+	const result = await runChildSession({
+		factory: { create: async () => ({
+			get messages() { return session.messages; },
+			subscribe: (listener) => session.subscribe(listener),
+			prompt: (text) => session.prompt(text),
+			steer: (text) => session.steer(text),
+			followUp: (text) => session.followUp(text),
+			abort: () => session.abort(),
+			hasQueuedMessages: () => session.hasQueuedMessages(),
+			dispose: async () => {
+				disposed = true;
+				await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+				session.dispose();
+			},
+		}) },
+		launch: {
+			session: { hooks: [] }, config: { agent: "context-fixture" },
+			capture: { finalDrainHeld: () => false },
+		},
+		prompt: "Manage context, then deliver the assigned fixture report.",
+		writeOutputLine: () => {}, appendChildEvent: () => {}, registerStop,
+	});
+	return { result, disposed };
+}
+
+const deterministicCompaction = (pi) => {
+	pi.on("session_before_compact", (event) => ({ compaction: {
+		summary: "Preserve the fixture assignment and continue it.",
+		firstKeptEntryId: event.preparation.firstKeptEntryId,
+		tokensBefore: event.preparation.tokensBefore,
+	} }));
+};
+
+for (const mode of ["background", "foreground"]) {
+test(`native child runner (${mode}): usage and compact are available, compaction completes before the assignment`, { timeout: 10_000 }, async (t) => {
+	const faux = fauxProvider({ models: [{ id: "faux-child-context", contextWindow: 200_000, maxTokens: 4_000 }] });
+	let finalContext;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("usage", {})]),
+		fauxAssistantMessage([fauxToolCall("compact", { summaryFocus: "Preserve the fixture assignment." })]),
+		fauxAssistantMessage([fauxToolCall("usage", {})]),
+		(context) => { finalContext = context; return fauxAssistantMessage("Fixture assignment completed after compaction."); },
+	]);
+	const { session, seedContext } = await makeHermeticSession(t, {
+		faux, child: mode === "background", nativeChildPrompt: mode === "foreground",
+		extensionPaths: { files: ["context-controls.ts"], paths: ["context-controls.ts"] },
+		extensionFactories: [deterministicCompaction],
+	});
+	assert.ok(session.getActiveToolNames().includes("usage"), "child usage is registered and allowed");
+	assert.ok(session.getActiveToolNames().includes("compact"), "child compact is registered and allowed");
+	seedContext();
+	const reasons = [];
+	session.subscribe((event) => { if (event.type === "compaction_start") reasons.push(event.reason); });
+	const { result, disposed } = await runHermeticChild(session);
+	assert.equal(result.exitCode, 0, result.error);
+	assert.equal(result.finalOutput, "Fixture assignment completed after compaction.");
+	assert.equal(faux.state.callCount, 4, "the existing child prompt owns every response through final delivery");
+	assert.deepEqual(reasons, ["manual"], "tool-requested compaction, not automatic threshold recovery");
+	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 1);
+	assert.match(JSON.stringify(finalContext), /Last compaction: SUCCESS/);
+	assert.ok(disposed, "the runner closes the session only after the post-compaction assignment finishes");
+});
+}
+
+test("native child runner: failed compaction reports failure and continues without retrying it", { timeout: 10_000 }, async (t) => {
+	const faux = fauxProvider({ models: [{ id: "faux-child-too-small", contextWindow: 200_000, maxTokens: 4_000 }] });
+	let finalContext;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("compact", {})]),
+		fauxAssistantMessage([fauxToolCall("usage", {})]),
+		(context) => { finalContext = context; return fauxAssistantMessage("Reported context-compaction failure; no task completion claimed."); },
+	]);
+	const { session } = await makeHermeticSession(t, {
+		faux, child: true,
+		extensionPaths: { files: ["context-controls.ts"], paths: ["context-controls.ts"] },
+	});
+	const { result } = await runHermeticChild(session);
+	assert.equal(result.exitCode, 0, result.error);
+	assert.equal(faux.state.callCount, 3);
+	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 0);
+	assert.match(JSON.stringify(finalContext), /Last compaction: FAILED/);
+	assert.match(result.finalOutput, /no task completion claimed/);
+});
+
+test("native child runner: batched compact leaves sibling work intact and never dispatches", { timeout: 10_000 }, async (t) => {
+	const faux = fauxProvider({ models: [{ id: "faux-child-batch", contextWindow: 200_000, maxTokens: 4_000 }] });
+	let siblings = 0;
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("compact", {}), fauxToolCall("sibling", {})]),
+		fauxAssistantMessage("Sibling completed; compaction was refused."),
+	]);
+	const { session, seedContext } = await makeHermeticSession(t, {
+		faux, child: true,
+		extensionPaths: { files: ["context-controls.ts"], paths: ["context-controls.ts"] },
+		extensionFactories: [(pi) => { pi.registerTool({
+			name: "sibling", label: "Sibling", description: "Owned fixture operation",
+			parameters: { type: "object", properties: {}, additionalProperties: false },
+			execute: async () => { siblings += 1; return { content: [{ type: "text", text: "sibling ran" }] }; },
+		}); }],
+	});
+	seedContext();
+	const { result } = await runHermeticChild(session);
+	assert.equal(result.exitCode, 0, result.error);
+	assert.equal(siblings, 1);
+	assert.equal(faux.state.callCount, 2);
+	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 0);
+});
+
+test("native child runner: stopping during compaction does not restart the worker or claim success", { timeout: 10_000 }, async (t) => {
+	const faux = fauxProvider({ models: [{ id: "faux-child-cancel", contextWindow: 200_000, maxTokens: 4_000 }] });
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("compact", {})]),
+		fauxAssistantMessage("Must not restart after cancellation."),
+	]);
+	let releaseCompaction;
+	let enteredCompaction;
+	const entered = new Promise((resolve) => { enteredCompaction = resolve; });
+	const { session, seedContext } = await makeHermeticSession(t, {
+		faux, child: true,
+		extensionPaths: { files: ["context-controls.ts"], paths: ["context-controls.ts"] },
+		extensionFactories: [(pi) => {
+			pi.on("session_before_compact", async (event) => {
+				enteredCompaction();
+				await new Promise((resolve) => { releaseCompaction = resolve; });
+				return { compaction: {
+					summary: "Cancelled fixture summary.",
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+				} };
+			});
+		}],
+	});
+	seedContext();
+	let stop;
+	const running = runHermeticChild(session, { registerStop: (callback) => { stop = callback; } });
+	await entered;
+	stop();
+	releaseCompaction();
+	const { result } = await running;
+	assert.equal(result.stopped, true);
+	assert.equal(result.exitCode, 1);
+	assert.equal(faux.state.callCount, 1, "no continuation after the owning runner stops the child");
+	assert.equal(session.sessionManager.getEntries().filter((e) => e.type === "compaction").length, 0);
 });

@@ -28,7 +28,7 @@ const T0 = 1_700_000_000_000;
 function fixture() {
 	const handlers = new Map();
 	const tools = new Map();
-	const sent = []; // pi.sendUserMessage — must stay EMPTY forever
+	const sent = []; // Task continuations; pressure alerts must not add any.
 	const sentCustom = []; // Durable compaction outcomes only.
 	const projected = [];
 	const observedNotices = [];
@@ -262,6 +262,26 @@ test('usage() distinguishes unavailable, unknown, and zero', async () => {
 	r = await tool.execute('id', {}, undefined, undefined, f.ctx);
 	assert.match(r.content[0].text, /150k/);
 	assert.match(r.content[0].text, /75%/);
+});
+
+test('continuation is fenced if the branch changes after the terminal callback', async () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' });
+	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	const settling = f.event('agent_settled');
+	f.state.compactCalls[0].options.onComplete({ tokensBefore: 100_000 });
+	f.event('session_before_tree');
+	await settling;
+	assert.equal(f.sent.length, 0, 'resolved callbacks cannot restart a replaced branch');
+});
+
+test('an aborted run discards its pending compaction without starting another turn', async () => {
+	const f = fixture();
+	f.event('session_start', { reason: 'startup' });
+	await f.tools.get('compact').execute('id', {}, undefined, undefined, f.ctx);
+	await f.event('agent_settled', { aborted: true });
+	assert.equal(f.state.compactCalls.length, 0);
+	assert.equal(f.sent.length, 0);
 });
 
 test('compact() defers dispatch to agent_settled and never runs mid-turn', async () => {

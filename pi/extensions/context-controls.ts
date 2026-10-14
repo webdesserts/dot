@@ -1,7 +1,7 @@
 /**
  * Context controls for Pi: `usage()` / `compact()` tools plus 40%/60%
- * context-pressure alerts. Stock Pi public APIs only — no SDK patches, no
- * settings reads or changes (near-auto alerting is dropped for this slice).
+ * context-pressure alerts for parents and native children. Stock Pi public
+ * APIs only — no SDK patches or settings changes.
  *
  * compact() only REQUESTS native compaction; preparation is the model's job.
  * `AgentSession.compact()` begins with `await this.abort()` and never resumes
@@ -10,7 +10,10 @@
  * is rejected; an accepted sole call returns `terminate: true` — the agent
  * core ends the run after a batch only when EVERY call sets it
  * (pi-agent-core tool-placement.js) — so compaction starts at settle without
- * killing sibling work. Duplicate/in-flight guards, stale-callback fences by
+ * killing sibling work. Settlement is held through the terminal compact
+ * callback, then one continuation of the existing task is queued. Abort or
+ * session replacement never restarts work.
+ * Duplicate/in-flight guards, stale-callback fences by
  * session identity + generation, and requests are invalidated on session or
  * branch replacement. Fulfillment is correlated by a request-time branch
  * marker (entry count + leaf id): a native error string alone is never
@@ -40,9 +43,6 @@ const fmtK = (tokens) =>
 	tokens >= 1000 ? `${Math.round(tokens / 100) / 10}k` : String(tokens);
 
 export default function (pi) {
-	// Native subagent children get no context controls (no inheritance).
-	if (process.env.PI_SUBAGENT_CHILD === "1") return;
-
 	let currentCtx = null;
 	let generation = 0;
 
@@ -254,19 +254,30 @@ export default function (pi) {
 		// The handle for the operation currently dispatched: native terminal
 		// events clear it so our callbacks never double-record the same op.
 		inFlightRequest = request;
+		let completeDispatch;
+		const completion = new Promise((resolve) => { completeDispatch = resolve; });
+		const complete = () => completeDispatch(request);
 		try {
 			inFlight = true;
 			ctx.compact({
 				customInstructions: request.customInstructions,
-				onComplete: (result) => finish(request, "success", undefined, {
-					tokensBefore: result?.tokensBefore,
-					estimatedTokensAfter: result?.estimatedTokensAfter,
-				}),
-				onError: (error) => finish(request, "error", error?.message ?? String(error)),
+				onComplete: (result) => {
+					finish(request, "success", undefined, {
+						tokensBefore: result?.tokensBefore,
+						estimatedTokensAfter: result?.estimatedTokensAfter,
+					});
+					complete();
+				},
+				onError: (error) => {
+					finish(request, "error", error?.message ?? String(error));
+					complete();
+				},
 			});
 		} catch (err) {
 			finish(request, "error", err?.message ?? String(err));
+			complete();
 		}
+		return completion;
 	};
 
 	// Terminal record for OUR dispatched operation. Stale-era callbacks and
@@ -388,9 +399,20 @@ export default function (pi) {
 			content: [{ type: "text", text: notice }], display: false, timestamp: Date.now(),
 		}] };
 	});
-	pi.on("agent_settled", (_event, ctx) => {
+	pi.on("agent_settled", async (event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
-		dispatchPending(ctx);
+		if (event.aborted) {
+			pending = null;
+			return;
+		}
+		const completion = dispatchPending(ctx);
+		const request = completion && await completion;
+		if (request && request.owner === sessionOwner(currentCtx) &&
+			request.generation === generation && lastCompaction?.outcome !== "aborted") {
+			// Recheck ownership after the await: replacement can happen after
+			// the callback resolves but before continuation is dispatched.
+			pi.sendUserMessage("Continue thinking about and doing what you were doing.");
+		}
 	});
 	pi.on("session_compact", (event, _ctx) => {
 		// Native truth (ours or auto). Clears any pending request so a queued
@@ -461,6 +483,7 @@ export default function (pi) {
 			"Call it as the ONLY tool call in your response: a batched call is rejected, and an accepted call " +
 			"terminates the turn so compaction starts when the run settles (running it mid-turn would abort " +
 			"sibling tool work). Acceptance is not success — check usage() for the confirmed outcome. " +
+			"After compaction finishes, the session continues its existing approved task; no heartbeat is required. " +
 			"This tool does not do memory preparation and requires no checklist.",
 		promptSnippet: "Request native compaction of the session context",
 		parameters: Type.Object(
@@ -516,8 +539,8 @@ export default function (pi) {
 							"Compaction request accepted (not yet started). This call terminates the turn; compaction runs " +
 							"automatically as soon as the run fully settles. Do not start new work in this turn. " +
 							"This acceptance is not success: the confirmed outcome (success, failure, or abort) is reported " +
-							"by the usage() tool. Ordinary continuation via the existing heartbeat is unaffected; nothing " +
-							"is auto-resumed beyond it.",
+							"by the usage() tool. After the terminal compaction callback, the session continues its existing " +
+							"approved task without needing a heartbeat. An aborted compaction or replaced session does not restart work.",
 					},
 				],
 				details: { ok: true, accepted: true, dispatched: false, terminate: true },

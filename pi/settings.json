@@ -3,7 +3,9 @@
   "defaultModel": "gpt-6.1-sol",
   "subagents": {
     "disableBuiltins": true,
-    "defaultSubagentOnlyExtensions": [],
+    "defaultSubagentOnlyExtensions": [
+      "~/.pi/agent/extensions/context-controls.ts"
+    ],
     "defaultModel": "openai/gpt-6-luna",
     "defaultThinking": "medium",
     "agentOverrides": {
@@ -19,7 +21,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -36,7 +40,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -52,7 +58,9 @@
           "ls",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -69,7 +77,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -85,7 +95,9 @@
           "ls",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6-luna",
         "thinking": "medium"
@@ -102,7 +114,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -119,7 +133,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -135,7 +151,9 @@
           "ls",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6-luna",
         "thinking": "low"
@@ -152,7 +170,9 @@
           "bash",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -171,7 +191,9 @@
           "ls",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
@@ -195,7 +217,9 @@
           "source_check",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6-luna",
         "thinking": "medium"
@@ -217,7 +241,9 @@
           "contact_supervisor",
           "mcp:nushell/evaluate",
           "mcp:nushell/command_help",
-          "mcp:nushell/list_commands"
+          "mcp:nushell/list_commands",
+          "usage",
+          "compact"
         ],
         "model": "openai/gpt-6-luna",
         "thinking": "low"
@@ -270,5 +296,6 @@
   "hideThinkingBlock": true,
   "enableInstallTelemetry": false,
   "editorPaddingX": 2,
-  "outputPad": 1
+  "outputPad": 1,
+  "deviceId": "ac5dff4c-fe16-4415-8b70-225101e66355"
 }

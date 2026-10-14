@@ -22,11 +22,10 @@
  * 1. No heartbeat TURN runs while a compaction is in flight: the worker's
  *    beat fires mid-compaction and the supervisor defers it (ctx.isIdle() is
  *    false during compaction) — the exact faux call count does not move.
- * 2. After the compaction is confirmed, the deferred heartbeat continuation
- *    happens and the model receives the confirmed outcome without any extra
- *    conversational turn.
- * 3. A human /hb pause issued DURING the in-flight compaction remains paused
- *    afterward: no heartbeat continuation runs and status reports paused.
+ * 2. After compaction is confirmed, one generic continuation receives the
+ *    outcome without waiting for a heartbeat.
+ * 3. /hb pause during compaction still silences heartbeat wakes; it does not
+ *    suppress the separately requested post-compaction continuation.
  *
  * Run: node --test pi/tests/context-controls/cross-extension.test.mjs
  */
@@ -200,17 +199,18 @@ async function waitUntil(fn, ms = 20_000) {
 	}
 }
 
-test("cross-extension: no heartbeat turn during in-flight compaction; confirmed outcome on the next heartbeat continuation", async (t) => {
+test("cross-extension: no heartbeat turn during compaction; one generic continuation receives the outcome", { timeout: 30_000 }, async (t) => {
 	const server = await startFakeAutonomyServer();
 	setFakeAutonomyEnv(server.base);
 
 	const faux = fauxProvider({ models: [{ id: "faux-x", contextWindow: 200_000, maxTokens: 4_000 }] });
 	const capturedContexts = [];
 	let releaseCompaction = null;
+	let compactionEntered = false;
 	const compactionInFlight = new Promise((r) => { releaseCompaction = r; });
 	faux.setResponses([
 		fauxAssistantMessage([fauxText("Requesting compaction."), fauxToolCall("compact", {})]),
-		// Capture the first heartbeat request, before any usage tool or human follow-up.
+		// Capture the generic continuation, before any usage tool or heartbeat.
 		(context) => {
 			capturedContexts.push(context);
 			return fauxAssistantMessage("Continuing after compaction.");
@@ -219,7 +219,7 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 
 	const { session, hbTool, hbCommand } = await makeCrossSession(t, {
 		faux,
-		onBeforeCompact: () => compactionInFlight,
+		onBeforeCompact: () => { compactionEntered = true; return compactionInFlight; },
 		releaseCompaction,
 		closeServer: server.close,
 	});
@@ -229,10 +229,11 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	const enabled = await hbTool.execute("id", { action: "enable", nextAction: "verify compaction coordination", idleDelaySeconds: 5 }, undefined, undefined, undefined);
 	assert.equal(enabled.details.state.mode, "goal");
 
-	await session.prompt("Please compact the session now.");
+	const prompting = session.prompt("Please compact the session now.");
+	assert.ok(await waitUntil(() => compactionEntered), "native compaction reached the owned gate");
 
-	// The compact call was the only model call so far; compaction is now
-	// in flight behind the test gate.
+	// prompt() now stays open through compaction and continuation; release
+	// the test gate before awaiting its final settlement.
 	assert.equal(faux.state.callCount, 1, "only the compact turn so far");
 	const compactionEntry = () => session.sessionManager.getEntries().find((e) => e.type === "compaction");
 
@@ -243,8 +244,9 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	assert.ok(!compactionEntry(), "compaction still in flight behind the gate");
 	assert.equal(faux.state.callCount, 1, "no heartbeat turn while the compaction is in flight");
 
-	// Confirmed outcome must reach the very first heartbeat continuation.
+	// Confirmed outcome must reach the generic continuation immediately.
 	releaseCompaction();
+	await prompting;
 	const outcomeEntry = () =>
 		session.sessionManager.getEntries().find(
 			(e) => e.type === "custom_message" && JSON.stringify(e).includes("Compaction completed successfully"),
@@ -252,9 +254,9 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	const outcomeAppeared = await waitUntil(() => outcomeEntry(), 20_000);
 	assert.ok(outcomeAppeared, "the confirmed outcome is in session history (model-visible, no extra turn)");
 	const continued = await waitUntil(() => faux.state.callCount >= 2 && capturedContexts.length > 0, 20_000);
-	assert.ok(continued, "heartbeat continuation ran without another human prompt");
+	assert.ok(continued, "generic continuation ran without another human prompt");
 	await hbCommand("pause", { ui: { notify() {} } });
-	assert.equal(faux.state.callCount, 2, "only the compact request and heartbeat continuation called the model");
+	assert.equal(faux.state.callCount, 2, "only the compact request and generic continuation called the model");
 	assert.ok(
 		capturedContexts.some((c) => JSON.stringify(c).includes("Compaction completed successfully")),
 		"the first continuation already receives confirmed completion",
@@ -265,42 +267,46 @@ test("cross-extension: no heartbeat turn during in-flight compaction; confirmed 
 	const heartbeatUserEntry = session.sessionManager.getEntries().find(
 		(e) => e.type === "message" && JSON.stringify(e).includes("[heartbeat] goal check"),
 	);
-	assert.ok(heartbeatUserEntry, "the heartbeat itself was delivered as a user turn after compaction");
+	assert.equal(heartbeatUserEntry, undefined, "continuation did not need a heartbeat turn");
 });
 
-test("cross-extension: /hb pause during in-flight compaction remains paused afterward", async (t) => {
+test("cross-extension: /hb pause silences heartbeat wakes without suppressing generic continuation", { timeout: 30_000 }, async (t) => {
 	const server = await startFakeAutonomyServer();
 	setFakeAutonomyEnv(server.base);
 
 	const faux = fauxProvider({ models: [{ id: "faux-x-2", contextWindow: 200_000, maxTokens: 4_000 }] });
 	let releaseCompaction = null;
+	let compactionEntered = false;
 	const compactionInFlight = new Promise((r) => { releaseCompaction = r; });
 	faux.setResponses([
 		fauxAssistantMessage([fauxText("Requesting compaction."), fauxToolCall("compact", {})]),
-		fauxAssistantMessage("should never run: paused"),
+		fauxAssistantMessage("Continued after compaction without a heartbeat."),
 	]);
 
 	const { session, hbTool, hbCommand } = await makeCrossSession(t, {
 		faux,
-		onBeforeCompact: () => compactionInFlight,
+		onBeforeCompact: () => { compactionEntered = true; return compactionInFlight; },
 		releaseCompaction,
 		closeServer: server.close,
 	});
 	seedContext(session);
 
 	await hbTool.execute("id", { action: "enable", nextAction: "pause coordination check", idleDelaySeconds: 5 }, undefined, undefined, undefined);
-	await session.prompt("Please compact the session now.");
+	const prompting = session.prompt("Please compact the session now.");
+	assert.ok(await waitUntil(() => compactionEntered), "native compaction reached the owned gate");
 	assert.equal(faux.state.callCount, 1, "only the compact turn so far");
 
 	// Human pause DURING the in-flight compaction.
 	await hbCommand("pause", { ui: { notify() {} } });
 	releaseCompaction();
+	await prompting;
 	const compacted = await waitUntil(() => session.sessionManager.getEntries().some((e) => e.type === "compaction"), 5000);
 	assert.ok(compacted, "compaction still completes");
 
 	// No heartbeat continuation for at least two full idle delays.
 	await new Promise((r) => setTimeout(r, 12_000));
-	assert.equal(faux.state.callCount, 1, "paused: no heartbeat turn after the compaction");
+	assert.equal(faux.state.callCount, 2, "only compact and generic continuation ran; no heartbeat turn");
+	assert.equal(session.getLastAssistantText(), "Continued after compaction without a heartbeat.");
 
 	const status = await hbTool.execute("id", { action: "status" }, undefined, undefined, undefined);
 	assert.equal(status.details.state.mode, "paused", "heartbeat state remains paused");
