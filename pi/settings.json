@@ -71,7 +71,7 @@
           "compact"
         ],
         "model": "openai/gpt-6-luna",
-        "thinking": "low"
+        "thinking": "medium"
       },
       "researcher": {
         "skills": [
