@@ -170,7 +170,7 @@
     "extensions/notifications.ts",
     "extensions/mcp-profiles.ts"
   ],
-  "lastChangelogVersion": "1.0.0",
+  "lastChangelogVersion": "1.4.0",
   "theme": "neapolitan-light",
   "steeringMode": "all",
   "followUpMode": "all",
