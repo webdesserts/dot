@@ -39,6 +39,7 @@ authors = ["Michael Mullins <michael@webdesserts.com>"]
 "~/.pi/agent/extensions/harness-context.ts" = "pi/extensions/harness-context.ts"
 "~/.pi/agent/extensions/mcp-profiles.ts" = "pi/extensions/mcp-profiles.ts"
 "~/.pi/agent/extensions/context-controls.ts" = "pi/extensions/context-controls.ts"
+"~/.pi/agent/extensions/context-retention" = "pi/extensions/context-retention"
 "~/.pi/agent/extensions/notifications.ts" = "pi/extensions/notifications.ts"
 "~/.pi/agent/extensions/notifications.worker.mjs" = "pi/extensions/notifications.worker.mjs"
 "~/.pi/agent/extensions/notifications.sse.protocol.mjs" = "pi/extensions/notifications.sse.protocol.mjs"

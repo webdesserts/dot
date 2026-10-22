@@ -30,25 +30,17 @@
  * Run: node --test pi/tests/context-controls/cross-extension.test.mjs
  */
 
-import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
-import { awaitWorkerExit, killStrayWorkers, restoreOriginalEnv, setFakeAutonomyEnv } from "./hermetic.mjs";
+import { awaitWorkerExit, killStrayWorkers, restoreOriginalEnv, setFakeAutonomyEnv, copyRetentionExtension } from "./hermetic.mjs";
 
-const sdkRoot = process.env.PI_SDK_ROOT ?? join(
-	execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
-	"@earendil-works/pi-coding-agent",
-);
-const { fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } = await import(
-	pathToFileURL(join(sdkRoot, "node_modules/@earendil-works/pi-ai/dist/providers/faux.js")).href
-);
-const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, getAgentDir, ModelRuntime } =
-	await import(pathToFileURL(join(sdkRoot, "dist/index.js")).href);
+import { sdk, faux as fauxModule } from "./sdk.mjs";
+const { fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } = fauxModule;
+const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, ModelRuntime } = sdk;
 
 // Loopback fake autonomy daemon: empty feed, always fast, request-counted.
 async function startFakeAutonomyServer() {
@@ -73,6 +65,8 @@ async function makeCrossSession(t, { faux, onBeforeCompact, releaseCompaction, c
 		await copyFile(new URL(`../../extensions/${file}`, import.meta.url), join(ownedAgentDir, file));
 	}
 
+	await copyRetentionExtension(ownedAgentDir);
+	const retentionPath = join(ownedAgentDir, "context-retention/index.ts");
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
 	});
@@ -80,7 +74,7 @@ async function makeCrossSession(t, { faux, onBeforeCompact, releaseCompaction, c
 		cwd: ownedCwd,
 		agentDir: ownedAgentDir,
 		settingsManager,
-		additionalExtensionPaths: [join(ownedAgentDir, "notifications.ts"), join(ownedAgentDir, "context-controls.ts")],
+		additionalExtensionPaths: [join(ownedAgentDir, "notifications.ts"), join(ownedAgentDir, "context-controls.ts"), retentionPath],
 		extensionFactories: [
 			// Deterministic compaction gated by the test.
 			(pi) => {
@@ -106,8 +100,8 @@ async function makeCrossSession(t, { faux, onBeforeCompact, releaseCompaction, c
 	const fileBacked = loaded.extensions.map((e) => e.path).filter((p) => !p.startsWith("<")).sort();
 	assert.deepEqual(
 		fileBacked,
-		[join(ownedAgentDir, "context-controls.ts"), join(ownedAgentDir, "notifications.ts")].sort(),
-		"exactly notifications and context-controls loaded (no global/package discovery)",
+		[join(ownedAgentDir, "context-controls.ts"), join(ownedAgentDir, "notifications.ts"), retentionPath].sort(),
+		"exactly notifications, context-controls and retention loaded (no global/package discovery)",
 	);
 	assert.deepEqual(loaded.errors, []);
 

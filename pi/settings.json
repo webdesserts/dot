@@ -4,7 +4,8 @@
   "subagents": {
     "disableBuiltins": true,
     "defaultSubagentOnlyExtensions": [
-      "~/.pi/agent/extensions/context-controls.ts"
+      "~/.pi/agent/extensions/context-controls.ts",
+      "~/.pi/agent/extensions/context-retention"
     ],
     "defaultModel": "openai/gpt-6-luna",
     "defaultThinking": "medium",
@@ -165,6 +166,7 @@
   ],
   "extensions": [
     "extensions/harness-context.ts",
+    "extensions/context-retention",
     "extensions/notifications.ts",
     "extensions/mcp-profiles.ts"
   ],

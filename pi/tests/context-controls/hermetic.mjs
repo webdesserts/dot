@@ -5,6 +5,13 @@
  * so teardown restores the true originals, not a previous test's fakes.
  */
 import { execFileSync } from "node:child_process";
+import { cp } from "node:fs/promises";
+import { join } from "node:path";
+
+/** Keep retention composed with context-controls under the same owned loader. */
+export async function copyRetentionExtension(agentDir) {
+	await cp(new URL("../../extensions/context-retention/", import.meta.url), join(agentDir, "context-retention"), { recursive: true });
+}
 
 export const killStrayWorkers = (dir) => {
 	try {

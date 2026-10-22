@@ -35,15 +35,9 @@ import { pathToFileURL } from "node:url";
 import { registerHooks } from "node:module";
 import * as hermetic from "./hermetic.mjs";
 
-const sdkRoot = process.env.PI_SDK_ROOT ?? join(
-	execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
-	"@earendil-works/pi-coding-agent",
-);
-const { fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } = await import(
-	pathToFileURL(join(sdkRoot, "node_modules/@earendil-works/pi-ai/dist/providers/faux.js")).href
-);
-const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, getAgentDir, ModelRuntime } =
-	await import(pathToFileURL(join(sdkRoot, "dist/index.js")).href);
+import { sdkRoot, sdk, faux as fauxModule } from "./sdk.mjs";
+const { fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } = fauxModule;
+const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, ModelRuntime } = sdk;
 
 const subagentsRoot = process.env.PI_SUBAGENTS_ROOT ?? join(homedir(), ".pi/agent/npm/node_modules/pi-subagents");
 const { resolveHostPeerAliases } = await import(pathToFileURL(join(subagentsRoot, "src/runs/background/runner-aliases.js")).href);
@@ -127,6 +121,8 @@ async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories
 		await copyFile(new URL(`../../extensions/${file}`, import.meta.url), join(ownedAgentDir, file));
 	}
 
+	await hermetic.copyRetentionExtension(ownedAgentDir);
+	const paths = [...extensionPaths.paths, "context-retention/index.ts"];
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
 	});
@@ -134,7 +130,7 @@ async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories
 		cwd: ownedCwd,
 		agentDir: ownedAgentDir,
 		settingsManager,
-		additionalExtensionPaths: extensionPaths.paths.map((p) => join(ownedAgentDir, p)),
+		additionalExtensionPaths: paths.map((p) => join(ownedAgentDir, p)),
 		extensionFactories,
 		noSkills: true,
 		noPromptTemplates: true,
@@ -151,7 +147,7 @@ async function makeHermeticSession(t, { faux, extensionPaths, extensionFactories
 	const fileBacked = loadedPaths.filter((p) => !p.startsWith("<"));
 	assert.deepEqual(
 		fileBacked,
-		extensionPaths.paths.map((p) => join(ownedAgentDir, p)).sort(),
+		paths.map((p) => join(ownedAgentDir, p)).sort(),
 		"exactly the owned extensions loaded (no global/package discovery)",
 	);
 	assert.ok(loadedPaths.every((p) => p.startsWith("<") || p.startsWith(ownedAgentDir)), "no extension loaded from outside the owned dirs");
@@ -430,7 +426,7 @@ async function runHermeticChild(session, { registerStop } = {}) {
 			steer: (text) => session.steer(text),
 			followUp: (text) => session.followUp(text),
 			abort: () => session.abort(),
-			hasQueuedMessages: () => session.hasQueuedMessages(),
+			hasQueuedMessages: () => session.pendingMessageCount > 0,
 			dispose: async () => {
 				disposed = true;
 				await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
