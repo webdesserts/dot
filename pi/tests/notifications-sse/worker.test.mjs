@@ -18,11 +18,12 @@ import { createServer } from "node:http";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import crypto from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, appendFileSync, readFileSync, statSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CUSTOM_TYPE, METADATA_SCHEMA_VERSION } from "../../extensions/notifications.sse.protocol.mjs";
+import { appendPadding, header as ownedHeader, receipt as ownedReceipt } from "./fixtures/large-session.mjs";
 
 const WORKER_PATH = new URL("../../extensions/notifications.worker.mjs", import.meta.url).pathname;
 const sha256Hex = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
@@ -88,8 +89,10 @@ function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone 
 				else res.end();
 			} else if (req.url === "/notifications/presentation/acknowledge") {
 				acks.push(JSON.parse(raw));
+				let outcome = "acknowledged";
 				if (ackBehavior) {
 					const behavior = ackBehavior();
+					if (behavior === "already_acknowledged") outcome = behavior;
 					if (behavior === "destroy") {
 						// Transport outage: the connection dies before a response — the
 						// exact uncertainty the identical-request retry exists for.
@@ -104,7 +107,7 @@ function makeFakeServer({ onStream, whoami, claimDeadlineMs = 30_000, renewGone 
 						return;
 					}
 				}
-				respond(200, { outcome: "acknowledged" });
+				respond(200, { outcome });
 			} else {
 				respond(404, { error: "unexpected endpoint" });
 			}
@@ -1142,4 +1145,62 @@ test("SSE worker: an edge that accepts TCP but never sends headers costs one sta
 	w.send({ event: "reconcile" });
 	await w.waitFor(() => ackWakes().length >= 2, "second hang warns again", 10000);
 	assert.equal(ackWakes().length, 2, "a fresh outage after recovery warns exactly once more");
+});
+
+test("large-session recovery: 2640 persisted offers reconcile before a newer presentation delivers, with historical ACK cost visible", { timeout: 60_000 }, async (t) => {
+	const history = 2_640;
+	const oldBody = "owned persisted outstanding offer";
+	const freshBody = "CURRENT_FEED_WORK after receipt-reader recovery";
+	let stream;
+	let sentFresh = false;
+	let firstDeliveryAckCount;
+	const oldOffer = { presentation_id: history, content_offer_id: null, summary_offer_id: 0,
+		body: oldBody, render_version: 1, digest: sha256Hex(oldBody) };
+	const freshOffer = { ...oldOffer, presentation_id: history + 1, body: freshBody, digest: sha256Hex(freshBody) };
+	const fake = makeFakeServer({
+		onStream: (_req, res) => { stream = res; presentationEvent(res, oldOffer); },
+		ackBehavior: () => {
+			const id = fake.acks.at(-1).presentation_id;
+			if (id === history && !sentFresh) {
+				sentFresh = true;
+				firstDeliveryAckCount = fake.acks.length;
+				queueMicrotask(() => presentationEvent(stream, freshOffer));
+			}
+			return id < history ? "already_acknowledged" : "ok";
+		},
+	});
+	const port = await listen(fake.server);
+	const origin = `http://127.0.0.1:${port}`;
+	const dir = mkdtempSync(join(tmpdir(), "sse-history-owned-"));
+	const file = join(dir, "session.jsonl");
+	let w;
+	t.after(async () => {
+		if (w) {
+			const exited = w.child.exitCode === null ? new Promise((resolve) => w.child.once("exit", resolve)) : Promise.resolve();
+			w.child.kill();
+			await exited;
+		}
+		fake.server.closeAllConnections?.();
+		await new Promise((resolve) => fake.server.close(resolve));
+		rmSync(dir, { recursive: true, force: true });
+	});
+	writeFileSync(file, JSON.stringify(ownedHeader()) + "\n");
+	for (let id = 1; id <= history; id++) appendFileSync(file,
+		JSON.stringify(ownedReceipt(oldBody, id, { scope: origin })) + "\n");
+	const bytes = appendPadding(file);
+	w = startWorker(port);
+	const started = Date.now();
+	w.send({ event: "session", sessionId: "owned-session", sessionFile: file });
+	await w.waitFor((line) => line.includes('"kind":"deliver"') && line.includes(freshBody), "new offer delivery after old receipt reconciliation", 30_000);
+	assert.equal(firstDeliveryAckCount, history, "one original pass serially revisits every compatible receipt, including 2639 already-acknowledged ones");
+	assert.deepEqual(fake.acks.slice(0, history).map((ack) => ack.presentation_id), Array.from({ length: history }, (_, i) => i + 1));
+	assert.equal(w.lines.filter((line) => line.includes('"kind":"deliver"') && line.includes(oldBody)).length, 0, "qualified old offer is not replay-delivered");
+	const deliveredAt = Date.now();
+	appendFileSync(file, JSON.stringify(ownedReceipt(freshBody, history + 1, { scope: origin })) + "\n");
+	w.send({ event: "reconcile" });
+	await w.waitFor((line) => line.includes('"kind":"ack"') && line.includes(`"presentationId":${history + 1},`), "fresh persisted receipt acknowledgement", 30_000);
+	const freshAckIndex = fake.acks.findIndex((ack) => ack.presentation_id === history + 1);
+	assert.ok(freshAckIndex >= history * 2, "a later pass re-ACKs historical receipts before reaching the fresh receipt; no cache/policy is invented");
+	t.diagnostic(JSON.stringify({ bytes, history, firstDeliveryAckCount, historicalRequestsBeforeFreshAck: freshAckIndex,
+		freshDeliveryMs: deliveredAt - started, freshDiskAckMs: Date.now() - deliveredAt }));
 });

@@ -31,12 +31,19 @@
  */
 
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 
 export const CUSTOM_TYPE = "autonomy-notification-presentation";
 export const METADATA_SCHEMA_VERSION = 1;
 /** This initial client pins render_version exactly 1; no future-version claim. */
 export const SUPPORTED_RENDER_VERSION = 1;
+
+// Explicit provisional availability limits, not archive truncation policies.
+// The total archive has no fixed size cap; each reconciliation validates a
+// single initial-size snapshot before returning any receipt authority.
+export const RECEIPT_READ_CHUNK_BYTES = 64 * 1024;
+export const MAX_SESSION_RECORD_BYTES = 64 * 1024 * 1024; // excludes LF
+export const MAX_SESSION_RECEIPTS = 100_000;
 
 /** The one wire endpoint this client consumes (POST — never EventSource). */
 export const STREAM_PATH = "/notifications/presentation/stream";
@@ -427,53 +434,115 @@ export function createSseParser({ maxEventBytes = 1_048_576, maxLineBytes = 131_
  * content, supported typed metadata (schema version, scope, recipient
  * handle, VALIDATED STABLE actor id, session, presentationId,
  * renderVersion 1, digest, optional part refs), and a recomputed UTF-8
- * SHA256 equal to the recorded digest. Missing/partial/unparseable files
- * authorize NOTHING. Metadata-only custom entries, wrong body/digest/
- * session/recipient/actor-id/version refuse.
+ * SHA256 equal to the recorded digest. One regular-file FD is scanned only
+ * through its initial size, in bounded byte chunks. Complete LF records are
+ * strict UTF8/JSON objects; a partial tail waits for the next pass. The first
+ * nonblank complete object must be the matching header; duplicates refuse.
+ * Malformed complete records, IO failures, detected replacement/truncation/mutation or
+ * safety-limit exhaustion discard ALL receipts, including a valid prefix.
+ * Metadata-only custom entries, wrong body/digest/session/recipient/actor-id/
+ * version refuse. Existing missing-part-reference -> null semantics remain.
+ *
+ * 64 MiB/record and 100000 candidates are explicit provisional availability
+ * limits, not pruning/suppression policies. Exceeding either requires review,
+ * never skipping data. Total archive size is not capped; scan time is linear.
+ * Appends beyond the snapshot are deferred. Metadata detects observable races,
+ * not an atomic transaction with a writer/HTTP ACK or truncate-and-regrow proof.
  */
 export function readQualifyingReceipts(sessionFile, sessionId, scopeId, recipientActor, recipientActorId) {
-	let raw;
+	let fd;
+	let result;
 	try {
-		raw = readFileSync(sessionFile, "utf8");
+		fd = openSync(sessionFile, "r");
+		const snapshot = fstatSync(fd, { bigint: true });
+		const size = Number(snapshot.size);
+		if (!snapshot.isFile() || !isSafeNonNegativeInteger(size) || BigInt(size) !== snapshot.size) {
+			result = refuseFile("session file is not a supported regular file");
+		} else {
+			result = scanReceiptSnapshot(fd, size, sessionId, scopeId, recipientActor, recipientActorId);
+			// The FD pins the scanned inode. Refuse observed replacement,
+			// truncation or same-size mutation; pure append waits for next pass.
+			if (result.ok && (!sameSnapshot(snapshot, fstatSync(fd, { bigint: true })) || !sameSnapshot(snapshot, statSync(sessionFile, { bigint: true })))) {
+				result = refuseFile("session file changed during receipt scan — retry reconciliation");
+			}
+		}
 	} catch (error) {
-		return {
-			ok: false,
-			reason: error?.code === "ENOENT" ? "session file absent" : "session file unreadable",
-			receipts: [],
-		};
+		result = refuseFile(error?.code === "ENOENT" ? "session file absent" : "session file unreadable");
+	} finally {
+		if (fd !== undefined) {
+			try { closeSync(fd); }
+			catch { result = refuseFile("session file unreadable"); }
+		}
 	}
-	const lines = raw.split("\n");
-	if (raw.length > 0 && !raw.endsWith("\n")) {
-		// A trailing partial line (mid-write) cannot authorize a receipt.
-		lines.pop();
-	}
-	let header = null;
+	return result;
+}
+
+const refuseFile = (reason) => ({ ok: false, reason, receipts: [] });
+const sameSnapshot = (before, after) => before.dev === after.dev && before.ino === after.ino &&
+	after.size >= before.size && (after.size > before.size ||
+		(before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs));
+
+function scanReceiptSnapshot(fd, size, sessionId, scopeId, recipientActor, recipientActorId) {
+	const chunk = Buffer.allocUnsafe(RECEIPT_READ_CHUNK_BYTES);
+	const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+	let pieces = [];
+	let recordBytes = 0;
+	let headerSeen = false;
 	const receipts = [];
-	for (const line of lines) {
-		if (!line.trim()) continue;
+	const consume = (bytes) => {
 		let entry;
 		try {
+			const line = decoder.decode(bytes);
+			if (!line.trim()) return;
 			entry = JSON.parse(line);
-		} catch {
-			return { ok: false, reason: "unparseable line (refusing the whole file)", receipts: [] };
+			if (entry === null || typeof entry !== "object" || Array.isArray(entry) ||
+				typeof entry.type !== "string" || entry.type.length === 0) throw new Error("not an entry");
+		} catch { return refuseFile("unparseable line (refusing the whole file)"); }
+		if (!headerSeen) {
+			if (entry.type !== "session") return refuseFile("session header is not the first complete entry on disk");
+			if (entry.id !== sessionId) return refuseFile("header id does not match the current session id (static mismatch class)");
+			headerSeen = true;
+			return;
 		}
-		if (!header && entry.type === "session") {
-			header = entry;
-			continue;
+		if (entry.type === "session") return refuseFile("multiple session headers on disk (refusing the whole file)");
+		if (entry.type !== "custom_message" || entry.customType !== CUSTOM_TYPE) return;
+		if (receipts.length === MAX_SESSION_RECEIPTS) {
+			return refuseFile("session exceeds 100000 receipt candidates — review receipt-reader safety limit; nothing acknowledged");
 		}
-		if (entry.type !== "custom_message" || entry.customType !== CUSTOM_TYPE) continue;
 		const verdict = qualify(entry, sessionId, scopeId, recipientActor, recipientActorId);
 		if (verdict.ok) receipts.push(verdict.receipt);
-		else receipts.push({ refused: true, reason: verdict.reason, presentationId: verdict.presentationId ?? null });
+		else receipts.push({ refused: true, reason: verdict.reason,
+			presentationId: isSafeNonNegativeInteger(verdict.presentationId) ? verdict.presentationId : null });
+	};
+	for (let position = 0; position < size;) {
+		const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position);
+		if (count === 0) return refuseFile("session file truncated during receipt scan — retry reconciliation");
+		position += count;
+		let start = 0;
+		while (start < count) {
+			const lf = chunk.indexOf(0x0a, start);
+			const complete = lf !== -1 && lf < count;
+			const end = complete ? lf : count;
+			const part = chunk.subarray(start, end);
+			if (recordBytes + part.length > MAX_SESSION_RECORD_BYTES) {
+				return refuseFile("session JSONL record exceeds 64 MiB — review receipt-reader safety limit; nothing acknowledged");
+			}
+			if (complete) {
+				const bytes = recordBytes ? Buffer.concat([...pieces, part], recordBytes + part.length) : part;
+				const refused = consume(bytes);
+				if (refused) return refused;
+				pieces = [];
+				recordBytes = 0;
+			} else if (part.length) {
+				// readSync reuses chunk: only the bounded unfinished record is copied.
+				pieces.push(Buffer.from(part));
+				recordBytes += part.length;
+			}
+			start = end + (complete ? 1 : 0);
+		}
 	}
-	if (!header) return { ok: false, reason: "no session header on disk", receipts: [] };
-	if (header.id !== sessionId) {
-		return {
-			ok: false,
-			reason: `header id does not match the current session id (static mismatch class)`,
-			receipts: [],
-		};
-	}
+	// No final LF means no receipt, even when the bytes form valid JSON.
+	if (!headerSeen) return refuseFile("no session header on disk");
 	return { ok: true, receipts };
 }
 
@@ -485,7 +554,7 @@ function qualify(entry, sessionId, scopeId, recipientActor, recipientActorId) {
 		return { ok: false, reason: "details missing (metadata-only or untyped)" };
 	}
 	if (details.schema !== METADATA_SCHEMA_VERSION) {
-		return { ok: false, reason: `unsupported metadata schema ${JSON.stringify(details.schema)}` };
+		return { ok: false, reason: "unsupported metadata schema" };
 	}
 	if (details.scope !== scopeId) {
 		return { ok: false, reason: "scope mismatch", presentationId: details.presentationId ?? null };
@@ -507,7 +576,7 @@ function qualify(entry, sessionId, scopeId, recipientActor, recipientActorId) {
 	if (details.renderVersion !== SUPPORTED_RENDER_VERSION) {
 		return {
 			ok: false,
-			reason: `unsupported renderVersion ${JSON.stringify(details.renderVersion)}`,
+			reason: "unsupported renderVersion",
 			presentationId: details.presentationId ?? null,
 		};
 	}
