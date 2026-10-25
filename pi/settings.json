@@ -30,7 +30,7 @@
           "usage",
           "compact"
         ],
-        "model": "openai/gpt-6.1-sol",
+        "model": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "thinking": "medium"
       },
       "claim-reviewer": {
@@ -50,7 +50,7 @@
           "usage",
           "compact"
         ],
-        "model": "openai/gpt-6.1-sol",
+        "model": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "thinking": "medium"
       },
       "scout": {
@@ -133,8 +133,8 @@
       "enforce": true,
       "strict": true,
       "allow": [
-        "umbra/glm-5.3-flash",
         "openai/gpt-6.1-sol",
+        "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "openai/gpt-6-luna",
         "openai/gpt-6-astra"
       ]

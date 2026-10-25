@@ -1,15 +1,15 @@
 ---
 name: claim-reviewer
 description: Independently judges selected criteria against fixed source and evidence; separates blockers from optional improvements.
-model: openai/gpt-6.1-sol
+tools: read, grep, find, ls, usage, compact, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands
+model: fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017
 thinking: medium
-tools: read, grep, find, ls, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands, usage, compact
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: false
 inheritSkills: true
-skillPath: ../../agents/skills
 skills: nushell, testing, docs
+skillPath: ../../agents/skills
 ---
 
 # Claim Reviewer

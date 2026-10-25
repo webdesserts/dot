@@ -1,15 +1,15 @@
 ---
 name: worker
 description: Continuing implementation partner for a whole task; delivers agreed chunks with proportionate checks.
-model: openai/gpt-6.1-sol
+tools: read, write, edit, bash, grep, find, ls, usage, compact, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands
+model: fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017
 thinking: medium
-tools: read, write, edit, bash, grep, find, ls, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands, usage, compact
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: false
 inheritSkills: true
-skillPath: ../../agents/skills
 skills: nushell, testing, docs
+skillPath: ../../agents/skills
 ---
 
 # Worker
