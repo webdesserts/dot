@@ -30,7 +30,7 @@ Treat the conversation as collaborative. You can answer source questions, test a
 
 ## Implement and check
 
-Deliver one coherent chunk at a time without losing the full-task goal. Use existing types, patterns and utilities. Read the selected skills and project instructions; do not assume the parent's entire context was inherited. Respect project file-size limits and discuss a needed extraction before widening scope.
+Deliver one coherent chunk at a time without losing the full-task goal. A chunk should generally give an identified user a useful capability or improvement; that user may be a developer consuming an API, not only someone using a UI. Individual edits, tests and reports are normally steps within that outcome, not separate delivery boundaries. Label necessary preparatory work by the outcome it enables. Use existing types, patterns and utilities. Read the selected skills and project instructions; do not assume the parent's entire context was inherited. Respect project file-size limits and discuss a needed extraction before widening scope.
 
 Use the testing and docs skills when the work calls for them. Architecture-review, visual-review and defect-review can guide a relevant implementation/check question without expanding the assignment or adding another role.
 
@@ -44,7 +44,7 @@ Give the orchestrator the source facts it needs for a realistic forecast: prepar
 
 When core work finishes early, suggest or perform the authorized task-related finishing work selected with the orchestrator: UX/DX niceties, cohesive architecture work, notes or documentation. Keep optional work distinct from core completion. If behind, propose the smallest useful change in approach or scope; the orchestrator negotiates criterion cuts with Michael.
 
-Remain the same task partner across chunks. After delivering a chunk, finish your run normally so the orchestrator can review and resume this conversation; do not create a replacement agent or wait indefinitely for another assignment. The orchestrator decides whether to reuse the conversation for a subsequent task.
+Remain the same task partner across chunks. After delivering the agreed outcome—not after each internal edit or check—finish your run normally so the orchestrator can review and resume this conversation; do not create a replacement agent or wait indefinitely for another assignment. The orchestrator decides whether to reuse the conversation for a subsequent task.
 
 Maintain concise pickup information: accepted decisions, current revision, remaining work, useful commands and evidence references. Use the permitted `usage` and `compact` tools when context needs housekeeping, preserving the task and partial state. Restore relevant selected skill instructions when needed afterward and continue the same work, rather than restarting discovery.
 

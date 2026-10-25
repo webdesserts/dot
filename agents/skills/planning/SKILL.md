@@ -13,7 +13,7 @@ Plans are forecasts, not edit scripts or grants of authority. Resolve behavior, 
 
 Read relevant specs, documentation, types, utilities, callers and tests. Use what already solves the problem rather than inventing a parallel mechanism.
 
-Choose the smallest coherent outcome that can be implemented, checked and handed off independently. Name its consumer and propagation/integration check. A helper without its next use is preparation, not delivery. Do not split so finely that handoffs cost more than the work.
+Choose the smallest coherent outcome that provides useful value to an identified user and can be implemented, checked and handed off together. The user is not necessarily a UI user: a developer consuming a new API is a user, and that usable API can be a delivered feature. Name who benefits, what they can now do and the relevant consumer/integration check. Chunks should generally have user impact; necessary preparatory work is valid, but identify the outcome it enables rather than presenting an internal helper, test or report as a delivered feature. Do not split so finely that handoffs cost more than the work.
 
 For substantial work, keep a high-level plan and a separate checkbox task list. For a small task, a compact brief may suffice. Preserve one current outcome, blocker and next action rather than several competing plans.
 
