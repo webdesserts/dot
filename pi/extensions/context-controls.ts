@@ -708,7 +708,7 @@ export default function contextControlsExtension(pi: ExtensionAPI) {
 			? theme.fg("warning", bodyText)
 			: theme.fg("dim", bodyText);
 
-		const box = new Box(outputPad, 0, (t) => theme.bg("customMessageBg", t));
+		const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
 		box.addChild(new Text(header, 0, 0));
 		box.addChild(new Text(body, 0, 0));
 		return box;
