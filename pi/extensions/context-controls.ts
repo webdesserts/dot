@@ -1,7 +1,7 @@
 /**
- * Context controls for Pi: `usage()` / `compact()` tools plus 40%/60%
- * context-pressure alerts for parents and native children. Stock Pi public
- * APIs only — no SDK patches or settings changes.
+ * Context controls for Pi: `usage()` / `compact()` tools plus durable, visible
+ * context-pressure alerts at 40 % and 60 % of the active context window.
+ * Generic (public dots) — used on all of Michael's machines.
  *
  * compact() only REQUESTS native compaction; preparation is the model's job.
  * `AgentSession.compact()` begins with `await this.abort()` and never resumes
@@ -20,62 +20,112 @@
  * marker (entry count + leaf id): a native error string alone is never
  * success, and only a real, LATER compaction on the SAME branch fulfills.
  *
- * 40%/60% alerts: once per level per epoch. An epoch resets only on a
- * CONFIRMED compaction entry (session_compact, by entry identity) or a
- * model/window change; unknown (null) usage and decreases never reset it.
- * Delivered levels are persisted per session and restored across same-epoch
- * reload/resume. Crossings coalesce into one notice projected through the
- * stock context hook into the request being built. Alerts create no turn,
- * mutate no tool result and do not accumulate in session history. Confirmed
- * compaction outcomes and restoration guidance use sendMessage with
- * triggerTurn:false. A private extension-origin input token checks whether
+ * Alerts — durable + visible:
+ *   Delivered via pi.sendMessage({ display: true }, { triggerTurn: false }).
+ *   Each alert is stored in session history, shown in the TUI, sent to the
+ *   model on subsequent requests, and never starts a new turn.  Called from
+ *   the `context` hook (which fires before every model request) so that a
+ *   crossing detected during a tool-heavy run is queued to the current run
+ *   flush and lands at the next model request without delay.
+ *
+ *   40%: nudge to consolidate Working Memory and notes, look for a compact point.
+ *   60%: direct to wrap up, consolidate, and compact; states the actual
+ *        auto-compaction threshold derived from compaction.reserveTokens in
+ *        settings (default 16 384 tokens → computed %).
+ *   One alert per level per epoch; epoch resets on a confirmed compaction or
+ *   model/window change.  Delivered levels persisted via appendEntry and
+ *   restored across same-epoch reload/resume.
+ *
+ * Model / window change:
+ *   A visible notice is sent naming the old and new window sizes, the current
+ *   percentage, and any applicable threshold guidance for levels already exceeded
+ *   under the new window.
+ *
+ * Resume / reload / new process:
+ *   If the first usage observation in a new epoch already exceeds an undelivered
+ *   level, that alert fires once instead of silently baselining.
+ *
+ * session_compact:
+ *   The visible outcome notice names the trigger reason ("Automatic compaction
+ *   (context threshold)", "Overflow-recovery compaction", or "Manual compaction").
+ *   The model-facing restoration message explicitly instructs re-validation of
+ *   world state, reloading of needed skills/notes, and updating Working Memory
+ *   with anything the summary may have lost.
+ *
+ * Restoration wake: a private extension-origin input token checks whether
  * restoration still needs an autonomous wake after earlier settled input
  * drains. A valid token transforms into a labeled user-role harness control
  * message within the original awaited prompt; stale tokens are handled.
  * The opaque token is never intentionally added to conversation history.
  */
+import type { ExtensionAPI, SessionStartEvent, SessionCompactEvent, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 
 /** Alert levels, as percentages of the context window. */
 const LEVELS = [
-	{ id: "p40", percent: 40, label: "40%" },
-	{ id: "p60", percent: 60, label: "60%" },
-];
+	{ id: "p40", percent: 40 },
+	{ id: "p60", percent: 60 },
+] as const;
+
+type LevelId = typeof LEVELS[number]["id"];
 
 const ENTRY_TYPE = "context-controls-state";
 // The owner-selected [system] label is provenance text, not a system role.
-const RESTORATION_NOTICE = "[system] Your context has been compacted, please review the summary, validate it against the current world state, and load any relevant skills and notes that you will need to continue.";
 const CONTINUATION_NOTICE = "[system] Harness continuation after compaction.";
 
-const fmtK = (tokens) =>
+const fmtK = (tokens: number) =>
 	tokens >= 1000 ? `${Math.round(tokens / 100) / 10}k` : String(tokens);
 
-export default function (pi) {
-	let currentCtx = null;
+// Reason labels for compaction notices.
+const REASON_LABEL: Record<string, string> = {
+	threshold: "Automatic compaction (context threshold)",
+	overflow: "Overflow-recovery compaction",
+	manual: "Manual compaction",
+};
+
+// Build the model-facing restoration instruction, naming the trigger reason.
+const buildRestorationText = (reason: string): string => {
+	const label = REASON_LABEL[reason] ?? "Compaction";
+	return (
+		`[system] ${label} just completed. ` +
+		"Re-validate your understanding of the current world state against the compaction summary. " +
+		"Reload any skills or notes you will need. " +
+		"Update your Working Memory with anything the summary may have omitted or oversimplified. " +
+		"Resume your task from where you left off."
+	);
+};
+
+export default function contextControlsExtension(pi: ExtensionAPI) {
+	let currentCtx: import("@earendil-works/pi-coding-agent").ExtensionContext | null = null;
 	let generation = 0;
 
 	// ── compaction request state ──
-	let batchToolCalls = [];
-	let pending = null; // accepted request, awaiting agent_settled dispatch
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let batchToolCalls: any[] = [];
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let pending: any = null; // accepted request, awaiting agent_settled dispatch
 	let inFlight = false; // dispatched, awaiting a terminal callback/event
-	let lastCompaction = null; // latest confirmed truth (success/error/abort)
-	let notifiedKey = null; // dedupe: one outcome announcement per operation
-	let inFlightRequest = null; // the request object while dispatched
-	let restoration = null;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let lastCompaction: any = null; // latest confirmed truth (success/error/abort)
+	let notifiedKey: string | null = null; // dedupe: one outcome announcement per operation
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let inFlightRequest: any = null; // the request object while dispatched
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let restoration: any = null;
 	// A runtime-private namespace lets stale owned tokens be dropped without
 	// retaining a growing collection of old requests or intercepting other input.
 	const resumePrefix = `context-controls-resume:${randomUUID()}:`;
-	let resumeToken = null;
+	let resumeToken: string | null = null;
 
 	// ── alert state ──
-	let lastPercent = null; // consecutive-observation baseline
-	let lastWindow = null;
-	let lastModelId = null;
-	let deliveredLevels = new Set(); // per-epoch delivered levels
-	let epochMarker = null; // compaction entry id defining the current epoch
-	let pendingNotice = null; // replaced, never accumulated
+	let lastPercent: number | null = null; // consecutive-observation baseline
+	let lastWindow: number | null = null;
+	let lastModelId: string | null = null;
+	let deliveredLevels = new Set<LevelId>(); // per-epoch delivered levels
+	let epochMarker: string | null = null; // compaction entry id defining the current epoch
 
+	// ── helpers ──
 	const sessionOwner = (ctx = currentCtx) => {
 		try {
 			const id = ctx?.sessionManager?.getSessionId?.();
@@ -85,11 +135,11 @@ export default function (pi) {
 		}
 	};
 
-	const modelIdentity = (ctx) => {
+	const modelIdentity = (ctx: typeof currentCtx) => {
 		try { return ctx?.model ? `${ctx.model.provider ?? ""}/${ctx.model.id}` : null; }
 		catch { return null; }
 	};
-	const latestCompactionId = (ctx) => {
+	const latestCompactionId = (ctx: typeof currentCtx) => {
 		try { return ctx?.sessionManager?.getBranch?.().filter((e) => e.type === "compaction").at(-1)?.id ?? null; }
 		catch { return null; }
 	};
@@ -102,7 +152,7 @@ export default function (pi) {
 		resumeToken = null;
 	};
 
-	const recordFailure = (outcome, detail) => {
+	const recordFailure = (outcome: string, detail?: string): void => {
 		lastCompaction = { outcome, at: Date.now(), detail };
 		pending = null;
 		inFlight = false;
@@ -111,7 +161,7 @@ export default function (pi) {
 
 	// Branch marker + correlation: only a compaction entry appended to the
 	// CURRENT branch AFTER the request (order, not timestamps) fulfills it.
-	const branchSnapshot = (ctx) => {
+	const branchSnapshot = (ctx: typeof currentCtx): { count: number; leafId: string | null } | null => {
 		try {
 			const branch = ctx?.sessionManager?.getBranch?.();
 			if (!Array.isArray(branch)) return null;
@@ -121,7 +171,7 @@ export default function (pi) {
 		}
 	};
 
-	const fulfilledAfterRequest = (ctx, request) => {
+	const fulfilledAfterRequest = (ctx: typeof currentCtx, request: any): boolean => {
 		if (!request.marker) return false; // marker unavailable: refuse
 		try {
 			const branch = ctx?.sessionManager?.getBranch?.();
@@ -139,23 +189,27 @@ export default function (pi) {
 		return false;
 	};
 
-	const notifyOutcome = (key, record) => {
+	const notifyOutcome = (key: string, record: any): void => {
+		if (!record) return;
 		if (notifiedKey === key) return; // one outcome per operation
 		notifiedKey = key;
 		lastCompaction = record;
 		const when = new Date(record.at).toISOString();
-		const text =
-			record.outcome === "success"
-				? `Compaction completed successfully at ${when}.`
-				: record.outcome === "aborted"
-					? `Compaction was aborted at ${when}.${record.detail ? ` ${record.detail}` : ""}`
-					: `Compaction FAILED at ${when}.${record.detail ? ` ${record.detail}` : ""}`;
+		let text: string;
+		if (record.outcome === "success") {
+			const label = REASON_LABEL[record.reason ?? "manual"] ?? "Compaction";
+			text = `${label} completed successfully at ${when}.`;
+		} else if (record.outcome === "aborted") {
+			text = `Compaction was aborted at ${when}.${record.detail ? ` ${record.detail}` : ""}`;
+		} else {
+			text = `Compaction FAILED at ${when}.${record.detail ? ` ${record.detail}` : ""}`;
+		}
 		// Simple no-turn confirmed-outcome channel: appended to session
 		// history immediately (or queued to the run flush mid-run) — the
 		// model sees it without any extra conversational turn.
 		try {
 			pi.sendMessage(
-				{ customType: "context-controls-notice", content: [{ type: "text", text }] },
+				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
 				{ triggerTurn: false },
 			);
 		} catch (err) {
@@ -163,8 +217,90 @@ export default function (pi) {
 		}
 	};
 
+	// ── auto-compact threshold ──
+	/** Compute the effective auto-compaction trigger as a percentage of the given window. */
+	const autoCompactPercent = (window: number): string | null => {
+		try {
+			const settings = pi.getSettings() as Record<string, unknown>;
+			const compaction = settings?.compaction as Record<string, unknown> | undefined;
+			const reserve = typeof compaction?.reserveTokens === "number" ? compaction.reserveTokens : 16384;
+			if (!window || window <= 0) return null;
+			return `${Math.round((1 - reserve / window) * 100)}%`;
+		} catch {
+			return null;
+		}
+	};
+
+	/** Format "N% (Mk / Wk tokens)" */
+	const fmtCtx = (percent: number, tokens: number, window: number) =>
+		`${Math.round(percent)}% (${fmtK(tokens)} / ${fmtK(window)} tokens)`;
+
+	/** Build the body text for a single alert level. */
+	const alertText = (level: typeof LEVELS[number], percent: number, tokens: number, window: number): string => {
+		const loc = fmtCtx(percent, tokens, window);
+		if (level.id === "p40") {
+			return (
+				`Context at ${loc}. ` +
+				"Start consolidating your Working Memory and notes, and look for the next good pause point to compact."
+			);
+		}
+		// p60
+		const autoPct = autoCompactPercent(window);
+		const autoNote = autoPct ? ` Auto-compaction will trigger at ~${autoPct}.` : "";
+		return (
+			`Context at ${loc}. ` +
+			"Wrap up what you're doing, consolidate Working Memory and notes, then compact (use the compact tool)." +
+			autoNote
+		);
+	};
+
+	/** Send a durable, visible alert via pi.sendMessage. */
+	const sendAlert = (levels: ReadonlyArray<typeof LEVELS[number]>, percent: number, tokens: number, window: number) => {
+		// If multiple levels crossed at once, report the highest one's guidance.
+		const level = levels[levels.length - 1];
+		const text = alertText(level, percent, tokens, window);
+		try {
+			pi.sendMessage(
+				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
+				{ triggerTurn: false },
+			);
+		} catch (err) {
+			console.error(`[context-controls] alert delivery failed: ${err}`);
+		}
+	};
+
+	/** Send a durable, visible notice about a model/window change. */
+	const sendWindowChangeNotice = (
+		oldWindow: number | null,
+		newWindow: number,
+		percent: number | null,
+		tokens: number | null,
+		pastLevels: ReadonlyArray<typeof LEVELS[number]>,
+	) => {
+		const oldStr = oldWindow ? `${fmtK(oldWindow)} tokens` : "unknown";
+		const newStr = `${fmtK(newWindow)} tokens`;
+		let text = `Context window changed: ${oldStr} → ${newStr}.`;
+		if (percent !== null && tokens !== null) {
+			text += ` You're now at ${fmtCtx(percent, tokens, newWindow)}.`;
+			if (pastLevels.length > 0) {
+				// Append the highest threshold's guidance.
+				text += " " + alertText(pastLevels[pastLevels.length - 1], percent, tokens, newWindow);
+			}
+		} else {
+			text += " Context percentage will be reported at the next model response.";
+		}
+		try {
+			pi.sendMessage(
+				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
+				{ triggerTurn: false },
+			);
+		} catch (err) {
+			console.error(`[context-controls] window-change notice failed: ${err}`);
+		}
+	};
+
 	// ── alert evaluation ──
-	const evaluateAlerts = (ctx) => {
+	const evaluateAlerts = (ctx: typeof currentCtx) => {
 		const usage = (() => {
 			try {
 				return ctx?.getContextUsage?.();
@@ -173,16 +309,38 @@ export default function (pi) {
 			}
 		})();
 		if (!usage) return;
+
 		const modelId = modelIdentity(ctx);
-		// Model/window change: new epoch, re-baseline silently.
-		if ((lastWindow !== null && usage.contextWindow !== lastWindow) ||
-			(lastModelId !== null && modelId !== null && modelId !== lastModelId)) {
+		const windowChanged = lastWindow !== null && usage.contextWindow !== lastWindow;
+		const modelChanged = lastModelId !== null && modelId !== null && modelId !== lastModelId;
+
+		if (windowChanged || modelChanged) {
+			const oldWindow = lastWindow;
+			// Reset epoch for the new model/window.
 			lastPercent = null;
 			deliveredLevels = new Set();
-			pendingNotice = null;
+			lastWindow = usage.contextWindow ?? lastWindow;
+			lastModelId = modelId ?? lastModelId;
+
+			// Send a visible change notice, including threshold guidance if already exceeded.
+			if (usage.tokens !== null && typeof usage.tokens === "number") {
+				const percent = typeof usage.percent === "number"
+					? usage.percent
+					: (usage.tokens / usage.contextWindow) * 100;
+				const pastLevels = LEVELS.filter((l) => percent >= l.percent);
+				for (const l of pastLevels) deliveredLevels.add(l.id);
+				if (pastLevels.length > 0) persistEpoch();
+				sendWindowChangeNotice(oldWindow, usage.contextWindow, percent, usage.tokens, pastLevels);
+				lastPercent = percent;
+			} else {
+				sendWindowChangeNotice(oldWindow, usage.contextWindow, null, null, []);
+			}
+			return;
 		}
+
 		lastWindow = usage.contextWindow ?? lastWindow;
 		lastModelId = modelId ?? lastModelId;
+
 		if (usage.tokens === null || typeof usage.tokens !== "number") {
 			// Unknown (may happen post-compaction): never resets the epoch.
 			return;
@@ -190,25 +348,32 @@ export default function (pi) {
 		const percent = typeof usage.percent === "number" ? usage.percent : (usage.tokens / usage.contextWindow) * 100;
 		const prev = lastPercent;
 		lastPercent = percent;
-		if (prev === null) return; // first observation is the baseline
+		if (prev === null) {
+			// First observation in this epoch.  For resume/reload: if already past
+			// any undelivered threshold, alert once instead of silently baselining.
+			const past = LEVELS.filter((l) => percent >= l.percent && !deliveredLevels.has(l.id));
+			if (past.length > 0) {
+				for (const l of past) deliveredLevels.add(l.id);
+				persistEpoch();
+				sendAlert(past, percent, usage.tokens, usage.contextWindow);
+			}
+			return;
+		}
+
+		// Normal crossing detection.
 		const crossed = LEVELS.filter(
 			(l) => prev < l.percent && percent >= l.percent && !deliveredLevels.has(l.id),
 		);
 		if (crossed.length === 0) return;
 		for (const l of crossed) deliveredLevels.add(l.id);
 		persistEpoch();
-		const parts = crossed.map((l) => l.label);
-		pendingNotice =
-			`Context pressure: usage crossed ${parts.join(" and ")} — now ${Math.round(percent)}% of the ` +
-			`${fmtK(usage.contextWindow)}-token window (${fmtK(usage.tokens)} tokens). ` +
-			"Native auto-compaction remains the safety net; consider running out the current task cleanly. " +
-			"This notice is delivered once; do not act on stale context.";
+		sendAlert(crossed, percent, usage.tokens, usage.contextWindow);
 	};
 
 	// ── usage report ──
-	const buildUsageReport = (ctx) => {
-		const lines = [];
-		let usage;
+	const buildUsageReport = (ctx: typeof currentCtx) => {
+		const lines: string[] = [];
+		let usage: ReturnType<NonNullable<typeof ctx>["getContextUsage"]> | undefined;
 		try {
 			usage = ctx?.getContextUsage?.();
 		} catch {
@@ -254,7 +419,7 @@ export default function (pi) {
 	};
 
 	// ── compaction dispatch ──
-	const dispatchPending = (ctx) => {
+	const dispatchPending = (ctx: typeof currentCtx): Promise<any> | undefined => {
 		if (!pending) return;
 		try {
 			if (ctx?.isIdle?.() === false) return; // a new run started: wait for the next settle
@@ -270,12 +435,12 @@ export default function (pi) {
 		// The handle for the operation currently dispatched: native terminal
 		// events clear it so our callbacks never double-record the same op.
 		inFlightRequest = request;
-		let completeDispatch;
-		const completion = new Promise((resolve) => { completeDispatch = resolve; });
+		let completeDispatch: (r: typeof request) => void;
+		const completion = new Promise<typeof request>((resolve) => { completeDispatch = resolve; });
 		const complete = () => completeDispatch(request);
 		try {
 			inFlight = true;
-			ctx.compact({
+			ctx!.compact({
 				customInstructions: request.customInstructions,
 				onComplete: (result) => {
 					finish(request, "success", undefined, {
@@ -284,13 +449,13 @@ export default function (pi) {
 					});
 					complete();
 				},
-				onError: (error) => {
+				onError: (error: Error) => {
 					finish(request, "error", error?.message ?? String(error));
 					complete();
 				},
 			});
 		} catch (err) {
-			finish(request, "error", err?.message ?? String(err));
+			finish(request, "error", (err as Error)?.message ?? String(err));
 			complete();
 		}
 		return completion;
@@ -298,7 +463,12 @@ export default function (pi) {
 
 	// Terminal record for OUR dispatched operation. Stale-era callbacks and
 	// operations already recorded by their native event are skipped.
-	const finish = (request, outcome, detail, extra = {}) => {
+	const finish = (
+		request: any,
+		outcome: string,
+		detail?: string,
+		extra: Record<string, unknown> = {},
+	): void => {
 		if (inFlightRequest !== request || request.generation !== generation ||
 			request.owner !== sessionOwner(currentCtx)) return;
 		inFlightRequest = null;
@@ -331,7 +501,7 @@ export default function (pi) {
 		}
 	};
 
-	const restoreEpoch = (ctx) => {
+	const restoreEpoch = (ctx: typeof currentCtx) => {
 		try {
 			const branch = ctx?.sessionManager?.getBranch?.();
 			if (!Array.isArray(branch)) return false;
@@ -340,22 +510,24 @@ export default function (pi) {
 			for (let i = entries.length - 1; i >= 0; i--) {
 				const e = entries[i];
 				if (e?.type !== "custom" || e?.customType !== ENTRY_TYPE) continue;
-				if (e?.data?.owner !== self) continue;
-				if (e.data.modelId !== modelIdentity(ctx) ||
-					e.data.contextWindow !== ctx?.getContextUsage?.()?.contextWindow ||
-					e.data.epochMarker !== latestCompactionId(ctx)) return false;
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const d = e?.data as any;
+				if (d?.owner !== self) continue;
+				if (d.modelId !== modelIdentity(ctx) ||
+					d.contextWindow !== ctx?.getContextUsage?.()?.contextWindow ||
+					d.epochMarker !== latestCompactionId(ctx)) return false;
+				const marker = d?.epochMarker;
+				const leafId = d?.leafId;
+				const markerOnBranch = typeof marker === "string" && branch.some((b) => b?.id === marker);
+				const leafOnBranch = typeof leafId === "string" && branch.some((b) => b?.id === leafId);
 				// The persisted epoch is valid only if its defining identity
 				// still exists on the current branch: the confirmed compaction
 				// entry, or (pre-compaction epochs) the persisted leaf entry.
-				const marker = e?.data?.epochMarker;
-				const leafId = e?.data?.leafId;
-				const markerOnBranch = typeof marker === "string" && branch.some((b) => b?.id === marker);
-				const leafOnBranch = typeof leafId === "string" && branch.some((b) => b?.id === leafId);
 				// Initial epoch (no compaction yet, empty branch): same-session
 				// reload keeps the epoch; anything else starts fresh.
 				if (!markerOnBranch && !leafOnBranch && !(marker === null && leafId === null)) return false;
 				deliveredLevels = new Set(
-					Array.isArray(e.data.delivered) ? e.data.delivered.filter((x) => typeof x === "string") : [],
+					Array.isArray(d.delivered) ? d.delivered.filter((x: unknown) => typeof x === "string") : [],
 				);
 				epochMarker = marker;
 				return true;
@@ -366,12 +538,12 @@ export default function (pi) {
 		return false;
 	};
 
-	pi.on("session_start", (event, ctx) => {
+	// ── lifecycle ──
+	pi.on("session_start", (event: SessionStartEvent, ctx) => {
 		currentCtx = ctx ?? null;
 		invalidateRequests();
 		batchToolCalls = [];
 		lastCompaction = null;
-		pendingNotice = null;
 		notifiedKey = null;
 		lastPercent = null;
 		lastWindow = null;
@@ -385,9 +557,8 @@ export default function (pi) {
 			epochMarker = latestCompactionId(ctx);
 		}
 	});
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (_event: SessionShutdownEvent, _ctx) => {
 		invalidateRequests();
-		pendingNotice = null;
 		notifiedKey = null;
 		currentCtx = null;
 	});
@@ -395,25 +566,18 @@ export default function (pi) {
 	pi.on("session_before_tree", invalidateRequests);
 	pi.on("session_before_fork", invalidateRequests);
 	pi.on("message_end", (event, _ctx) => {
-		const message = event?.message;
+		const message = (event as { message?: { role?: string; content?: unknown[] } })?.message;
 		if (message?.role === "assistant") {
 			batchToolCalls = Array.isArray(message.content)
-				? message.content.filter((c) => c?.type === "toolCall")
+				? (message.content as { type?: string }[]).filter((c) => c?.type === "toolCall")
 				: [];
 		}
 	});
 	pi.on("context", (event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
 		evaluateAlerts(ctx);
-		const notice = pendingNotice;
-		pendingNotice = null;
-		if (!notice) return;
-		// Project once into the request being built, without starting a turn,
-		// changing tool output, or accumulating alert messages in history.
-		return { messages: [...event.messages, {
-			role: "custom", customType: "context-controls-notice",
-			content: [{ type: "text", text: notice }], display: false, timestamp: Date.now(),
-		}] };
+		// Alerts are now sent via pi.sendMessage (durable, visible) — no longer
+		// injected as ephemeral one-shot messages into the request being built.
 	});
 	pi.on("before_agent_start", () => {
 		// Any real run (including a newer user request) consumes the need for
@@ -422,22 +586,23 @@ export default function (pi) {
 		resumeToken = null;
 	});
 	pi.on("input", (event, ctx) => {
-		if (event.source !== "extension" || !event.text.startsWith(resumePrefix)) return;
+		if ((event as { source?: string; text?: string }).source !== "extension" ||
+			!(event as { text?: string }).text?.startsWith(resumePrefix)) return;
 		// An older owned token must not consume a newer request's wake.
-		if (event.text !== resumeToken) return { action: "handled" };
+		if ((event as { text: string }).text !== resumeToken) return { action: "handled" } as const;
 		const requirement = restoration;
 		const canResume = requirement && requirement.owner === sessionOwner(ctx) &&
 			requirement.generation === generation && lastCompaction?.outcome === "success";
 		resumeToken = null;
-		if (!canResume) return { action: "handled" };
+		if (!canResume) return { action: "handled" } as const;
 		restoration = null;
 		// Keep this run inside AgentSession's awaited deferred prompt. Starting
 		// a separate sendMessage run here would let the parent/child finish early.
-		return { action: "transform", text: CONTINUATION_NOTICE };
+		return { action: "transform", text: CONTINUATION_NOTICE } as const;
 	});
 	pi.on("agent_settled", async (event, ctx) => {
 		currentCtx = ctx ?? currentCtx;
-		if (event.aborted) {
+		if ((event as { aborted?: boolean }).aborted) {
 			pending = null;
 			restoration = null;
 			resumeToken = null;
@@ -448,19 +613,20 @@ export default function (pi) {
 		if (request && request.owner === sessionOwner(currentCtx) &&
 			request.generation === generation && lastCompaction?.outcome === "success" &&
 			restoration?.generation === request.generation) {
-			// Settled actions are awaited in order by AgentSession. A newer
+				// Settled actions are awaited in order by AgentSession. A newer
 			// deferred user run may finish before this token reaches input;
 			// recheck there, rather than enqueueing an unconditional model run.
 			resumeToken = `${resumePrefix}${request.generation}`;
 			pi.sendUserMessage(resumeToken);
 		}
 	});
-	pi.on("session_compact", (event, ctx) => {
+	pi.on("session_compact", (event: SessionCompactEvent, ctx) => {
 		currentCtx = ctx ?? currentCtx;
 		// Native truth (ours or auto). Clears any pending request so a queued
 		// dispatch never double-compacts, and starts a NEW alert epoch by the
 		// confirmed entry identity.
 		const entryId = typeof event?.compactionEntry?.id === "string" ? event.compactionEntry.id : null;
+		const reason = event?.reason ?? "manual";
 		pending = null;
 		const key = entryId ? `entry:${entryId}` : `native:${Date.now()}`;
 		lastCompaction = {
@@ -468,23 +634,29 @@ export default function (pi) {
 			at: Date.now(),
 			tokensBefore: event?.compactionEntry?.tokensBefore,
 			detail: "confirmed by session_compact",
+			reason,
 		};
 		inFlightRequest = null;
 		inFlight = false;
 		notifyOutcome(key, lastCompaction);
 		restoration = { owner: sessionOwner(), generation };
-		pi.sendMessage({ customType: "context-controls-restoration", display: false,
-			content: [{ type: "text", text: RESTORATION_NOTICE }] }, { triggerTurn: false });
+		pi.sendMessage(
+			{
+				customType: "context-controls-restoration",
+				display: false,
+				content: [{ type: "text", text: buildRestorationText(reason) }],
+			},
+			{ triggerTurn: false },
+		);
 		// New epoch by confirmed entry identity: levels may announce again as
-		// usage regrows. A stale pre-compaction pressure notice is dropped.
+		// usage regrows.
 		deliveredLevels = new Set();
 		epochMarker = entryId;
-		pendingNotice = null;
 		persistEpoch();
 	});
 	pi.on("session_compact_failed", (event, _ctx) => {
-		const detail = event?.errorMessage ?? "compaction failed or was aborted";
-		const outcome = event?.aborted ? "aborted" : "error";
+		const detail = (event as { errorMessage?: string })?.errorMessage ?? "compaction failed or was aborted";
+		const outcome = (event as { aborted?: boolean })?.aborted ? "aborted" : "error";
 		if (inFlightRequest) {
 			// The native failure for OUR dispatched operation: record it here;
 			// the wrapped onError/onComplete is deduplicated against this.
@@ -506,6 +678,7 @@ export default function (pi) {
 		recordFailure(outcome, detail);
 	});
 
+	// ── tools ──
 	pi.registerTool({
 		name: "usage",
 		label: "Context Usage",
@@ -514,7 +687,7 @@ export default function (pi) {
 			"and the confirmed outcome of the last compaction. Read-only: it never changes model or window settings.",
 		promptSnippet: "Inspect context-window usage and last compaction outcome",
 		parameters: Type.Object({}, { additionalProperties: false }),
-		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
+		execute: async (_toolCallId: string, _params: unknown, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: typeof currentCtx) => {
 			const text = buildUsageReport(ctx);
 			return { content: [{ type: "text", text }], details: { report: text } };
 		},
@@ -539,25 +712,26 @@ export default function (pi) {
 			},
 			{ additionalProperties: false },
 		),
-		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+		execute: async (_toolCallId: string, params: { summaryFocus?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: typeof currentCtx) => {
 			if (pending || inFlight) {
 				return {
 					content: [
 						{
-							type: "text",
+							type: "text" as const,
 							text:
 								"A compaction request is already accepted and waiting for the current run to settle. " +
 								"Not re-requesting. Check usage() for the confirmed outcome.",
 						},
 					],
-					details: { ok: false, duplicate: true, inFlight },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					details: { ok: false, duplicate: true, inFlight } as any,
 				};
 			}
 			if (batchToolCalls.length > 1) {
 				return {
 					content: [
 						{
-							type: "text",
+							type: "text" as const,
 							text:
 								`Compaction request REJECTED: it was batched with ${batchToolCalls.length - 1} sibling tool call(s). ` +
 								"The sibling work must not be interrupted by compaction. Retry with compact as the ONLY tool " +
@@ -565,7 +739,8 @@ export default function (pi) {
 								"settle. No request was recorded.",
 						},
 					],
-					details: { ok: false, rejected: "siblings", batchSize: batchToolCalls.length },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					details: { ok: false, rejected: "siblings", batchSize: batchToolCalls.length } as any,
 				};
 			}
 			const focus = typeof params?.summaryFocus === "string" && params.summaryFocus.trim() ? params.summaryFocus.trim() : undefined;
