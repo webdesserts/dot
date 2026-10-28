@@ -1,0 +1,17 @@
+{
+  "disabledFeatures": [
+    "agent-management",
+    "watchdog",
+    "panes",
+    "missions",
+    "lane-management",
+    "spawn-budget-grants",
+    "preflight",
+    "lane-metadata",
+    "gates",
+    "tool-budgets",
+    "control-overrides",
+    "extension-bindings",
+    "external-machines"
+  ]
+}
