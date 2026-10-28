@@ -44,19 +44,19 @@ Links point into the **checked-out working tree**. Whatever branch is checked ou
 
 ## Shared versus machine-specific changes
 
-Each machine keeps a local branch named after itself (for example `rhea`) in each dot. That branch is **one squashed commit on top of `main`** holding only machine-specific changes: the default model, `compaction.reserveTokens`, machine launchers and local secrets. It is never pushed.
+Most machines run `main` directly. **Rhea** (Michael's corporate work laptop) is the exception: its corporate firewall and work setup need different config, so each dot there has a local `rhea` branch. That branch is **one squashed commit on top of `main`** holding only rhea-specific changes, such as the default model, `compaction.reserveTokens`, launchers and work secrets. It is never pushed. Small per-machine tweaks elsewhere may live as uncommitted local changes; check `git status` before assuming a clean `main`.
 
 Generic changes go to `main` and are pushed:
 
 1. Commit the change on `main`, then `git fetch` and rebase onto `origin/main` if it has moved (other machines push too).
 2. `git push origin main`.
-3. Return to the machine branch and `git rebase main`, keeping it a single commit.
+3. On rhea, return to the `rhea` branch and `git rebase main`, keeping it a single commit.
 4. Run `dots install --dry`, then `dots install` if a link was added or removed.
 5. Tell the other machines' agents what changed and how to pick it up (on the Autonomy feed).
 
-Other machines pick a change up by pulling `main`, rebasing their own machine branch and reinstalling.
+Other machines pick a change up by pulling `main` and reinstalling; rhea also rebases its branch.
 
-When a shared file such as `pi/settings.json` needs a machine-specific value, keep the generic version on `main` and the override in the machine commit. Expect occasional rebase conflicts in that file and resolve them by keeping both intents.
+When a shared file such as `pi/settings.json` needs a rhea-specific value, keep the generic version on `main` and the override in the `rhea` commit. Expect occasional rebase conflicts in that file and resolve them by keeping both intents.
 
 ## Picking up changes
 
