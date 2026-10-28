@@ -4,6 +4,8 @@ on_force_close "detach"
 
 theme "neapolitan-light"
 simplified_ui true
+pane_frames false
+show_startup_tips false
 
 // Match the Neapolitan light palette used by Pi and iTerm.
 themes {
