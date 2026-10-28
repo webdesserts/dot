@@ -59,8 +59,15 @@
  * The opaque token is never intentionally added to conversation history.
  */
 import type { ExtensionAPI, SessionStartEvent, SessionCompactEvent, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
+
+/** Metadata stored in the details field of context-controls-notice messages. */
+interface NoticeDetails {
+	/** Distinguishes alert severity for rendering. p40/p60 = context pressure alerts; notice = other. */
+	level: "p40" | "p60" | "notice";
+}
 
 /** Alert levels, as percentages of the context window. */
 const LEVELS = [
@@ -209,7 +216,7 @@ export default function contextControlsExtension(pi: ExtensionAPI) {
 		// model sees it without any extra conversational turn.
 		try {
 			pi.sendMessage(
-				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
+				{ customType: "context-controls-notice", display: true, details: { level: "notice" } satisfies NoticeDetails, content: [{ type: "text", text }] },
 				{ triggerTurn: false },
 			);
 		} catch (err) {
@@ -261,7 +268,7 @@ export default function contextControlsExtension(pi: ExtensionAPI) {
 		const text = alertText(level, percent, tokens, window);
 		try {
 			pi.sendMessage(
-				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
+				{ customType: "context-controls-notice", display: true, details: { level: level.id } satisfies NoticeDetails, content: [{ type: "text", text }] },
 				{ triggerTurn: false },
 			);
 		} catch (err) {
@@ -291,7 +298,7 @@ export default function contextControlsExtension(pi: ExtensionAPI) {
 		}
 		try {
 			pi.sendMessage(
-				{ customType: "context-controls-notice", display: true, content: [{ type: "text", text }] },
+				{ customType: "context-controls-notice", display: true, details: { level: "notice" } satisfies NoticeDetails, content: [{ type: "text", text }] },
 				{ triggerTurn: false },
 			);
 		} catch (err) {
@@ -676,6 +683,35 @@ export default function contextControlsExtension(pi: ExtensionAPI) {
 			return;
 		}
 		recordFailure(outcome, detail);
+	});
+
+	// ── message renderer ──
+	// Renders context-controls-notice messages with a friendly subdued label.
+	// Uses details.level to apply appropriate emphasis (p60 = warning colour).
+	pi.registerMessageRenderer<NoticeDetails>("context-controls-notice", (message, { outputPad }, theme) => {
+		const level = message.details?.level ?? "notice";
+
+		// Extract plain text from our always-array content.
+		const rawContent = message.content;
+		const bodyText = Array.isArray(rawContent)
+			? (rawContent as { type: string; text?: string }[])
+				.filter((c) => c.type === "text")
+				.map((c) => c.text ?? "")
+				.join("")
+			: String(rawContent);
+
+		// Subdued "⚙ context" header label, dim regardless of level.
+		const header = theme.fg("dim", "⚙ context");
+
+		// Body emphasis: 60% alerts use warning colour; everything else stays dim.
+		const body = level === "p60"
+			? theme.fg("warning", bodyText)
+			: theme.fg("dim", bodyText);
+
+		const box = new Box(outputPad, 0, (t) => theme.bg("customMessageBg", t));
+		box.addChild(new Text(header, 0, 0));
+		box.addChild(new Text(body, 0, 0));
+		return box;
 	});
 
 	// ── tools ──
