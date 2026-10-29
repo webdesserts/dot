@@ -3,7 +3,7 @@ name: claim-reviewer
 description: Independently judges selected criteria against fixed source and evidence; separates blockers from optional improvements.
 tools: read, grep, find, ls, usage, compact, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands
 model: openai/gpt-6.1-sol
-thinking: medium
+thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: false

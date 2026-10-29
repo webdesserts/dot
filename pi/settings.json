@@ -8,7 +8,7 @@
       "~/.pi/agent/extensions/context-retention"
     ],
     "defaultModel": "openai/gpt-6.1-sol",
-    "defaultThinking": "medium",
+    "defaultThinking": "high",
     "agentOverrides": {
       "worker": {
         "skills": [
@@ -51,7 +51,7 @@
           "compact"
         ],
         "model": "openai/gpt-6.1-sol",
-        "thinking": "medium"
+        "thinking": "high"
       },
       "scout": {
         "skills": [
@@ -72,7 +72,7 @@
           "compact"
         ],
         "model": "openai/gpt-6.1-sol",
-        "thinking": "medium"
+        "thinking": "high"
       },
       "researcher": {
         "skills": [
@@ -93,7 +93,7 @@
           "compact"
         ],
         "model": "openai/gpt-6.1-sol",
-        "thinking": "medium"
+        "thinking": "high"
       },
       "analyst": {
         "disabled": true
