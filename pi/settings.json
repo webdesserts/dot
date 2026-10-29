@@ -7,7 +7,7 @@
       "~/.pi/agent/extensions/context-controls.ts",
       "~/.pi/agent/extensions/context-retention"
     ],
-    "defaultModel": "openai/gpt-6-luna",
+    "defaultModel": "openai/gpt-6.1-sol",
     "defaultThinking": "medium",
     "agentOverrides": {
       "worker": {
@@ -30,7 +30,7 @@
           "usage",
           "compact"
         ],
-        "model": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
+        "model": "anthropic/claude-opus-5-5",
         "thinking": "medium"
       },
       "claim-reviewer": {
@@ -50,7 +50,7 @@
           "usage",
           "compact"
         ],
-        "model": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "scout": {
@@ -71,7 +71,7 @@
           "usage",
           "compact"
         ],
-        "model": "openai/gpt-6-luna",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "researcher": {
@@ -92,7 +92,7 @@
           "usage",
           "compact"
         ],
-        "model": "openai/gpt-6-luna",
+        "model": "openai/gpt-6.1-sol",
         "thinking": "medium"
       },
       "analyst": {
@@ -133,6 +133,8 @@
       "enforce": true,
       "strict": true,
       "allow": [
+        "anthropic/claude-opus-5-5",
+        "google/gemini-4-argon",
         "openai/gpt-6.1-sol",
         "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "openai/gpt-6-luna",

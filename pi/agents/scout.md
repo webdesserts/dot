@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Answers focused local source, machine and network questions with useful evidence and source anchors.
-model: openai/gpt-6-luna
+model: openai/gpt-6.1-sol
 thinking: medium
 tools: read, grep, find, ls, bash, write, contact_supervisor, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands, usage, compact
 systemPromptMode: replace

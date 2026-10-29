@@ -2,7 +2,7 @@
 name: worker
 description: Continuing implementation partner for a whole task; delivers agreed chunks with proportionate checks.
 tools: read, write, edit, bash, grep, find, ls, usage, compact, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands
-model: fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017
+model: anthropic/claude-opus-5-5
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true

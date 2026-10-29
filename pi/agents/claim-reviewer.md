@@ -2,7 +2,7 @@
 name: claim-reviewer
 description: Independently judges selected criteria against fixed source and evidence; separates blockers from optional improvements.
 tools: read, grep, find, ls, usage, compact, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands
-model: fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017
+model: openai/gpt-6.1-sol
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true

@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Answers related web and documentation questions, filtering sources and uncertainty for the orchestrator.
-model: openai/gpt-6-luna
+model: openai/gpt-6.1-sol
 thinking: medium
 tools: read, write, web_search, fetch_content, get_search_content, source_check, mcp:nushell/evaluate, mcp:nushell/command_help, mcp:nushell/list_commands, usage, compact
 systemPromptMode: replace
