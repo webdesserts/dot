@@ -88,8 +88,8 @@ export function stripAutonomyNotification(raw: string): string {
 		const m = t.match(/^-\s+\S+\s+@\s+\S+\s+\([^)]*\):\s*(.*)/);
 		if (m) {
 			let body = m[1].trim();
-			// Optional "sender replied to you: " prefix
-			body = body.replace(/^\S+\s+replied to you:\s*/i, "");
+			// Optional "sender replied to you: " / "sender mentioned you: " prefix
+			body = body.replace(/^\S+\s+(?:replied to|mentioned) you:\s*/i, "");
 			// Optional leading @mention
 			body = body.replace(/^@\S+\s*/, "");
 			if (body) out.push(body);
