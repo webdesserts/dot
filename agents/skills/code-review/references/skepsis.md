@@ -75,4 +75,22 @@ Changing server configuration or recovering a failed server may still need a res
 
 Prefer a stable port when practical; announce any address change. If a restart rotates the token, give Michael the new authenticated link directly in this private chat and reuse the existing context's tab. Keep only the intended review instances running, with one clearly identified instance per active review context rather than duplicate instances of the same review.
 
+When launching a long-lived Skepsis process from an MCP shell (`nu --mcp`) or tool call, detach the process and replace all three standard streams before `exec` so it cannot inherit the MCP server's stdio sockets. Never use `sh -c 'cd <repo> && nohup node ... >> server.out 2>> server.err &'`: in POSIX `sh`, `&` binds to the entire `&&` compound list, leaving a background `sh` wrapper process whose own `fd 1`/`fd 2` still point to `nu --mcp`'s stdio sockets and hang Pi's `/reload` when tearing down MCP transports. Instead, use an OS service manager (`launchd`) or spawn directly with explicit `cwd`, `detached: true`, and file descriptors:
+
+```js
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const out = fs.openSync(outPath, "a");
+const err = fs.openSync(errPath, "a");
+const child = spawn(nodeBin, [skepsisCli, ...args], {
+  cwd: repoDir,
+  detached: true,
+  stdio: ["ignore", out, err],
+});
+child.unref();
+console.log(JSON.stringify({ pid: child.pid }));
+```
+
+Verify with `lsof -n -P -p <pid>` that `fd 0/1/2` point only to `/dev/null` and the log files, with no `unix` or `PIPE` descriptors inherited from the parent shell.
+
 Record the current server's identity, cwd, port, log and feedback paths, review base/SHA and intentional ongoing custody in the project pickup—not in this reusable skill. Don't claim a Nu job handle belongs to a different session or that killing a job proves its external process exited. No reboot service is implied by a local review trial.

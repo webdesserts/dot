@@ -111,6 +111,8 @@ job recv --tag $tag --timeout 5sec
 
 `job list` shows active jobs, not durable result history. A completed job may disappear while its mailbox result remains. `job kill` controls a Nu job; do not infer that every external descendant was terminated. Use a finite receive timeout and leave no abandoned jobs.
 
+When starting an authorized long-lived external process from `nu --mcp`, detach it and replace `stdin`, `stdout` and `stderr` (for example via Node `spawn(cmd, args, { cwd, detached: true, stdio: ['ignore', outFd, errFd] }).unref()` or a host service manager). Avoid `sh -c 'cd dir && nohup cmd >out 2>err &'`: in POSIX `sh`, `&` backgrounds the whole `&&` subshell without redirecting the subshell's own `fd 1`/`fd 2`, keeping `nu --mcp`'s stdio sockets open and hanging Pi's `/reload` during MCP shutdown.
+
 **A mailbox result does not wake the agent.** If subsequent agent action needs a completion wake, use a verified harness-native background mechanism or an explicit bridge. In Pi, native async subagents already notify completion; Nu jobs alone do not. Do not prescribe obsolete Claude `Monitor`/background-tool APIs.
 
 ## Persistent MCP sessions are useful, not durable
