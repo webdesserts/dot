@@ -153,6 +153,21 @@
     "npm:pi-subagents",
     "npm:pi-web-access"
   ],
+  "spendFooter": {
+    "dailyWarnUsd": 20,
+    "dailyRedUsd": 30,
+    "providers": {
+      "google": {
+        "monthlyCapUsd": 200
+      },
+      "anthropic": {
+        "monthlyCapUsd": 200
+      },
+      "openai": {
+        "subscription": true
+      }
+    }
+  },
   "memoryRecall": {
     "enabled": true,
     "auditOnly": true,
