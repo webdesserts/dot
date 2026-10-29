@@ -376,7 +376,11 @@ export default function memoryRecallExtension(pi: ExtensionAPI): void {
 		sessionActive = true;
 		lastSearchTs = 0;
 		lastMessageCount = 0;
-		rebaselinePending = false;
+		// Set rebaselinePending so the first context hook after session start
+		// rebases to the current projection length rather than querying the
+		// whole resumed history from slice(0). The first real query comes from
+		// before_agent_start (which runs its own query from the current prompt).
+		rebaselinePending = true;
 		lastQueriedAssistantText = null;
 		seenMemoryIds = new Set();
 		seenNotePaths = new Set();
