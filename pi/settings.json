@@ -151,6 +151,11 @@
     "npm:pi-subagents",
     "npm:pi-web-access"
   ],
+  "memoryRecall": {
+    "enabled": true,
+    "auditOnly": true,
+    "logDetail": "metadata"
+  },
   "compaction": {
     "enabled": true,
     "reserveTokens": 140000,
