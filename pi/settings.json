@@ -148,11 +148,6 @@
     "openai/gpt-6-astra": "medium"
   },
   "packages": [
-    {
-      "source": "npm:@luxusai/pi-hindsight",
-      "extensions": [],
-      "skills": []
-    },
     "npm:pi-subagents",
     "npm:pi-web-access"
   ],
