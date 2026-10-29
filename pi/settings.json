@@ -2,6 +2,7 @@
   "defaultProvider": "openai",
   "defaultModel": "gpt-6.1-sol",
   "subagents": {
+    "timeoutMs": 2147483647,
     "disableBuiltins": true,
     "defaultSubagentOnlyExtensions": [
       "~/.pi/agent/extensions/context-controls.ts",
