@@ -4,6 +4,14 @@
  * Log location: ~/.pi/agent/logs/memory-recall.jsonl
  * Rotation: rename to .1 when size exceeds maxLogBytes (5 MB default).
  * Written synchronously to avoid losing entries on crash.
+ *
+ * Log directory is created with mode 0700; log file is written with mode 0600.
+ * The rotated .1 file is also chmod'd to 0600 after rename.
+ *
+ * Detail levels (logDetail in config):
+ *   "metadata" (default) — logs ids, types, scores, note paths and lengths.
+ *     No query text or result text is written.
+ *   "full" — additionally writes query text and result text (for calibration).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -15,21 +23,51 @@ function resolveLogPath(logPath: string): string {
 }
 
 /** Append one JSON line; rotate if the file exceeds maxLogBytes. */
-export function appendAuditLog(entry: AuditEntry, config: Pick<MemoryRecallConfig, "logPath" | "maxLogBytes">): void {
+export function appendAuditLog(entry: AuditEntry, config: Pick<MemoryRecallConfig, "logPath" | "maxLogBytes" | "logDetail">): void {
 	const logPath = resolveLogPath(config.logPath);
 	const logDir = path.dirname(logPath);
 	try {
-		fs.mkdirSync(logDir, { recursive: true });
-		// Rotate if too large
+		// Directory: 0700 so only the owning user can list or enter it.
+		// mkdirSync({mode}) only sets permissions on directories it creates;
+		// chmod tightens one that already exists at a looser mode (e.g. 755).
+		fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+		try { fs.chmodSync(logDir, 0o700); } catch { /* ignore — best effort */ }
+		// Rotate if too large; chmod the rotated file to 0600 as well.
 		try {
 			const stat = fs.statSync(logPath);
 			if (stat.size > config.maxLogBytes) {
 				fs.renameSync(logPath, logPath + ".1");
+				try { fs.chmodSync(logPath + ".1", 0o600); } catch { /* ignore */ }
 			}
 		} catch {
 			// File doesn't exist yet — ok
 		}
-		fs.appendFileSync(logPath, JSON.stringify(entry) + "\n", "utf8");
+		// Build the log object. "metadata" mode omits query text and result text.
+		const logObj = config.logDetail === "full"
+			? entry
+			: {
+				ts: entry.ts,
+				sessionId: entry.sessionId,
+				agent: entry.agent,
+				querySource: entry.querySource,
+				queryLength: entry.query.length,
+				banks: entry.banks,
+				results: entry.results.map((r) => ({
+					id: r.id, type: r.type,
+					scores: r.scores, usedField: r.usedField, usedScore: r.usedScore,
+				})),
+				injected: entry.injected,
+				dropped: entry.dropped,
+				notesResults: entry.notesResults.map((n) => ({ path: n.path, relevance: n.relevance })),
+				notesInjected: entry.notesInjected,
+				notesDropped: entry.notesDropped,
+				auditOnly: entry.auditOnly,
+				latencyMs: entry.latencyMs,
+				error: entry.error,
+			};
+		fs.appendFileSync(logPath, JSON.stringify(logObj) + "\n", "utf8");
+		// Tighten file permissions to 0600 after every write (idempotent, cheap).
+		try { fs.chmodSync(logPath, 0o600); } catch { /* ignore */ }
 	} catch {
 		// Log failures must never propagate to the agent
 	}

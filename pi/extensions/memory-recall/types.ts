@@ -19,7 +19,9 @@ export interface NoteResult {
 }
 
 export interface MemoryRecallConfig {
-	/** Hindsight REST base URL. Default: "http://127.0.0.1:18888" */
+	/** Enable automatic recall. Default: false. Set true to opt in per machine. */
+	enabled: boolean;
+	/** Hindsight REST base URL. Default: "http://127.0.0.1:8888" (umbra local). */
 	hindsightBaseUrl: string;
 	/** Agent-specific bank ID. Default: "agent-${AUTONOMY_AGENT_ID}" */
 	agentBank: string;
@@ -59,6 +61,12 @@ export interface MemoryRecallConfig {
 	logPath: string;
 	/** Rotate log when it exceeds this many bytes. Default: 5 MB */
 	maxLogBytes: number;
+	/**
+	 * Audit log detail level. Default: "metadata".
+	 * "metadata" — logs ids, types, scores, paths, lengths but not query or result text.
+	 * "full"     — additionally logs query text and result text (for calibration).
+	 */
+	logDetail: "metadata" | "full";
 }
 
 export interface InjectedMemory {

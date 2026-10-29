@@ -28,6 +28,15 @@
  *   { memoryRecall: MemoryRecallConfig }
  *   Source: settings-schema.js:290, types.d.ts:1286.
  *
+ * Key settings for opt-in:
+ *   enabled     — must be true to activate (default false). Read at session_start
+ *                  so /reload picks it up without restarting Pi.
+ *   logDetail   — "metadata" (default) omits query/result text from the audit log.
+ *                  Set "full" for calibration; rhea uses "full".
+ *   auditOnly   — search + log but never inject. Default true; disable once quality
+ *                  confirmed via log review.
+ *   hindsightBaseUrl — override per machine (rhea: http://127.0.0.1:18888).
+ *
  * Linking (tell Michael):
  *   Add to Dot.toml: "~/.pi/agent/extensions/memory-recall" = "pi/extensions/memory-recall"
  *   (Same pattern as context-retention directory.)
@@ -57,6 +66,63 @@ const CUSTOM_QUERY_TYPES = new Set([
 	"subagent-compaction-resume",
 ]);
 
+// ── Custom-message content strippers ────────────────────────────────────────
+// Strip boilerplate so recall queries contain only the actionable message text.
+
+/**
+ * Strip Autonomy notification boilerplate.
+ * Input shape (one or more items):
+ *   Autonomy notifications:\n
+ *   - sender @ place (ref): [sender replied to you: ][@mention ]<text>\n
+ *   total unattended: N
+ * Returns only the message text(s) joined by a space.
+ */
+export function stripAutonomyNotification(raw: string): string {
+	const out: string[] = [];
+	for (const line of raw.split("\n")) {
+		const t = line.trim();
+		if (!t) continue;
+		if (/^Autonomy notifications:/i.test(t)) continue;
+		if (/^total unattended:/i.test(t)) continue;
+		// Bullet line: - sender @ place (ref): body
+		const m = t.match(/^-\s+\S+\s+@\s+\S+\s+\([^)]*\):\s*(.*)/);
+		if (m) {
+			let body = m[1].trim();
+			// Optional "sender replied to you: " prefix
+			body = body.replace(/^\S+\s+replied to you:\s*/i, "");
+			// Optional leading @mention
+			body = body.replace(/^@\S+\s*/, "");
+			if (body) out.push(body);
+		} else {
+			// Preserve any other non-empty lines (continuation text, etc.)
+			out.push(t);
+		}
+	}
+	return out.join(" ").trim();
+}
+
+/**
+ * Strip subagent-notify boilerplate, returning only the report body.
+ * Input shape:
+ *   Background task completed: **worker**\n\nworker:\n\n<body>\n\n
+ *   Retention-managed async directory: …\nSession file: …\n
+ *   Full output: …\nParent action: …
+ */
+export function stripSubagentNotify(raw: string): string {
+	let s = raw;
+	// Remove leading header + optional blank "worker:" label
+	s = s.replace(/^Background task completed:[^\n]*\n+/i, "");
+	s = s.replace(/^\w+:\n+/m, "");
+	// Remove trailing footer lines (any of them may come first)
+	for (const pat of [
+		/\n*Retention-managed async directory:[\s\S]*/i,
+		/\n*Session file:[\s\S]*/i,
+		/\n*Full output:[\s\S]*/i,
+		/\n*Parent action:[\s\S]*/i,
+	]) { s = s.replace(pat, ""); }
+	return s.trim();
+}
+
 // ── Acknowledgement skip rule ─────────────────────────────────────────────────
 // Matches bare acknowledgements (single or short compound) that carry no query signal.
 const ACK_PATTERN = /^(yeah[, ]*(sure|ok|okay)?|yep|ok|okay|sure|go ahead|sounds good|thanks\.?|great|perfect|noted|got it|will do|done|makes sense)[.!]?\s*$/i;
@@ -76,7 +142,7 @@ const DEFAULT_CONFIG: MemoryRecallConfig = {
 	maxMemories: 3,
 	maxMemoryTokens: 400,
 	maxNotes: 3,
-	noteThreshold: 40,
+	noteThreshold: 55,  // raised from 40: real relevance clusters at 40-60 regardless of topic
 	vaultPath: "~/notes",
 	noteExclusions: [
 		"agents/*/Working Memory*",
@@ -88,10 +154,13 @@ const DEFAULT_CONFIG: MemoryRecallConfig = {
 	toolResultAllowlist: [],
 	minIntervalMs: 20000,
 	timeoutMs: 2000,   // raised from 1500 — 740-910ms observed latency on 501-fact bank
+	/** Off by default; machines opt in with enabled:true in settings.json. */
+	enabled: false,
 	auditOnly: true,
 	enableTrace: false,
 	logPath: "~/.pi/agent/logs/memory-recall.jsonl",
 	maxLogBytes: 5 * 1024 * 1024,
+	logDetail: "metadata",  // omits query/result text; set "full" for calibration
 };
 
 function readConfig(pi: ExtensionAPI): MemoryRecallConfig {
@@ -145,7 +214,10 @@ function extractQuery(
 		} else if (m.role === "custom") {
 			const ct = m.customType ?? "";
 			if (CUSTOM_QUERY_TYPES.has(ct)) {
-				const t = contentText(m.content).trim().slice(0, 400);
+				let raw = contentText(m.content).trim();
+				if (ct === "autonomy-notification-presentation") raw = stripAutonomyNotification(raw);
+				else if (ct === "subagent-notify") raw = stripSubagentNotify(raw);
+				const t = raw.slice(0, 400);
 				if (t) parts.push({ text: t, source: `custom:${ct}` });
 			}
 		} else if (m.role === "toolResult") {
@@ -373,7 +445,9 @@ export default function memoryRecallExtension(pi: ExtensionAPI): void {
 		config = readConfig(pi);
 		currentCtx = ctx;
 		sessionId = ctx.sessionManager.getSessionId?.() ?? "";
-		sessionActive = true;
+		// Opt-in guard: disabled sessions do no work. Re-read each session_start so
+		// /reload picks up a settings change without restarting Pi.
+		sessionActive = config.enabled;
 		lastSearchTs = 0;
 		lastMessageCount = 0;
 		// Set rebaselinePending so the first context hook after session start
@@ -424,7 +498,10 @@ export default function memoryRecallExtension(pi: ExtensionAPI): void {
 		} else if (ev.messageType === "custom" && ev.message) {
 			const ct = ev.message.customType ?? "";
 			if (CUSTOM_QUERY_TYPES.has(ct)) {
-				const t = contentText(ev.message.content).trim().slice(0, 400);
+				let raw = contentText(ev.message.content).trim();
+				if (ct === "autonomy-notification-presentation") raw = stripAutonomyNotification(raw);
+				else if (ct === "subagent-notify") raw = stripSubagentNotify(raw);
+				const t = raw.slice(0, 400);
 				if (t) { query = t; source = `custom:${ct}`; }
 			}
 		}

@@ -90,6 +90,20 @@ export interface FilteredMemories {
 }
 
 /**
+ * Normalise a memory text for near-duplicate detection:
+ * lowercase, collapse whitespace, strip trailing " | When: …" / " | Involving: …",
+ * keep first 120 characters.
+ */
+function normTextKey(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.replace(/\s*\|\s*(when|involving):.*$/i, "")
+		.slice(0, 120)
+		.trim();
+}
+
+/**
  * Apply threshold (with reranker→semantic fallback), dedup against seenIds,
  * cap to maxMemories / maxMemoryTokens.
  *
@@ -97,6 +111,11 @@ export interface FilteredMemories {
  *   If preferField=="reranker" and the result has a numeric reranker score → compare to config threshold.
  *   If reranker is null/missing → fall back to semantic field against fallbackThreshold (0.75).
  *   Any other preferField → compare directly.
+ *
+ * Near-duplicate collapse (before caps):
+ *   Results whose normalised text prefix matches (see normTextKey) are collapsed
+ *   to the highest-scoring copy. Duplicates are logged as dropped with reason "duplicate".
+ *   This prevents world+observation pairs with identical fact text from both being injected.
  */
 export function filterMemories(
 	results: MemoryResult[],
@@ -110,7 +129,22 @@ export function filterMemories(
 	// When the preferred field is reranker and it's missing, fall back to semantic ≥ 0.75
 	const semanticFallbackThreshold = 0.75;
 
+	// ── Near-duplicate collapse (before threshold / cap checks) ──────────────────
+	const byNormKey = new Map<string, { result: MemoryResult; score: number }>();
 	for (const r of results) {
+		const key = normTextKey(r.text);
+		const score = resolveScore(r.scores, preferField).value;
+		const prev = byNormKey.get(key);
+		if (!prev || score > prev.score) byNormKey.set(key, { result: r, score });
+	}
+	const keptIds = new Set([...byNormKey.values()].map((v) => v.result.id));
+	for (const r of results) {
+		if (!keptIds.has(r.id)) dropped.push({ id: r.id, reason: "duplicate" });
+	}
+	// Work from the deduplicated list, preserving the caller's score-descending order.
+	const dedupedResults = results.filter((r) => keptIds.has(r.id));
+
+	for (const r of dedupedResults) {
 		if (seenIds.has(r.id)) {
 			dropped.push({ id: r.id, reason: "already injected" });
 			continue;
