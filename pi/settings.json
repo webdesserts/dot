@@ -162,7 +162,7 @@
         "monthlyCapUsd": 200
       },
       "anthropic": {
-        "monthlyCapUsd": 200
+        "monthlyCapUsd": 300
       },
       "openai": {
         "subscription": true
