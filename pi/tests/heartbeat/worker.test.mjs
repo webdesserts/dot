@@ -605,6 +605,7 @@ test("ambient: init waits for the fallback gate; an explicit complete arms immed
 			return true;
 		}, 2000);
 		assert.match(beats(w.lines)[0], /\[heartbeat\] 30-minute inactivity check/);
+		assert.match(beats(w.lines)[0], /call compact\(\) now/, "idle ambient beat nudges compaction before a cold-cache return");
 	} finally {
 		await stopWorker(w);
 		fake.server.close();

@@ -233,8 +233,11 @@ const clearIdleTimer = () => {
 const ambientHeartbeat = () =>
 	emitHeartbeat(
 		"[heartbeat] 30-minute inactivity check: run queue-watch, compare against the plan, " +
-			"do the next unblocked step or dispatch/report on a worker. If everything is truly " +
-			"blocked and there is genuinely nothing to plan, end this turn immediately — do not pad.",
+			"and do the next unblocked step or dispatch/report on a worker. If everything is " +
+			"done or waiting on a human and the session has accumulated substantial context, " +
+			"prep Working Memory, pause heartbeats if appropriate, and call compact() now so " +
+			"returning later does not pay a large cold-cache prefill miss; if already compact, " +
+			"end this turn immediately — do not pad.",
 	);
 
 const goalHeartbeat = () =>
