@@ -31,35 +31,46 @@ test("recognition removes only a provenance-backed exact native suffix", () => {
 	assert.equal(cleanMessage({ role: "branchSummary", fromId: "other", summary: entry.summary }, [{ ...entry, type: "branch_summary", fromId: "origin" }]).summary, entry.summary);
 });
 
-function registered(t, version) {
+function registered(t) {
 	const handlers = new Map();
 	const warnings = [];
 	t.mock.method(console, "warn", (text) => warnings.push(text));
-	registerRetention({ on: (event, handler) => handlers.set(event, handler) }, version);
+	registerRetention({ on: (event, handler) => handlers.set(event, handler) });
 	return { handlers, warnings, ctx: { hasUI: false, sessionManager: { getBranch: () => [native()] } } };
 }
 
-test("unqualified SDK cancels summary operations with bounded diagnostic, not ordinary navigation/projection", (t) => {
-	const { handlers, warnings, ctx } = registered(t, "99.0.0");
+test("any SDK version runs cleanup; unsupported shapes skip with warning, not cancel", (t) => {
+	const { handlers, warnings, ctx } = registered(t);
+	// context hook always cleans on any version
+	const cleaned = handlers.get("context")({ messages: [{ role: "compactionSummary", summary: native().summary }] }, ctx);
+	assert.ok(cleaned, "context returns cleaned messages");
+	assert.equal(cleaned.messages[0].summary, GOAL);
+	// session_before_compact with supported shape mutates and returns undefined
 	const p = preparation();
-	const before = structuredClone(p);
-	assert.deepEqual(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), { cancel: true });
-	assert.deepEqual(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), { cancel: true });
-	assert.equal(warnings.length, 1);
-	assert.match(warnings[0], /Qualify context-retention/);
-	assert.deepEqual(p, before);
+	assert.equal(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), undefined);
+	assert.equal(p.previousSummary, GOAL, "previousSummary cleaned");
+	// session_before_compact with unsupported shape: skip, warn once, no cancel
+	const bad = { ...preparation(), fileOps: {} };
+	const before = structuredClone(bad);
+	assert.equal(handlers.get("session_before_compact")({ preparation: bad, branchEntries: [native()] }, ctx), undefined);
+	assert.equal(handlers.get("session_before_compact")({ preparation: bad, branchEntries: [native()] }, ctx), undefined);
+	assert.equal(warnings.length, 1, "warning emitted once");
+	assert.match(warnings[0], /cleanup skipped/);
+	assert.deepEqual(bad, before, "unsupported preparation not mutated");
+	// session_before_tree: userWantsSummary:false still skips cleanly
 	assert.equal(handlers.get("session_before_tree")({ preparation: { userWantsSummary: false } }, ctx), undefined);
-	assert.deepEqual(handlers.get("session_before_tree")({ preparation: { userWantsSummary: true } }, ctx), { cancel: true });
-	assert.equal(handlers.get("context")({ messages: [{ role: "compactionSummary", summary: native().summary }] }, ctx), undefined);
+	// session_before_tree with unsupported shape: skip, no cancel
+	assert.equal(handlers.get("session_before_tree")({ preparation: { targetId: "t", userWantsSummary: true, entriesToSummarize: Object.freeze([native()]) } }, ctx), undefined);
 });
 
-test("unsupported preparation shapes cancel atomically while supported aliases preserve boundaries", (t) => {
-	const { handlers, warnings, ctx } = registered(t, "1.4.0");
+test("unsupported preparation shapes skip cleanly without cancel; supported aliases mutate atomically", (t) => {
+	const { handlers, warnings, ctx } = registered(t);
 	for (const p of [{ ...preparation(), fileOps: {} }, Object.freeze(preparation())]) {
 		const before = structuredClone(p);
 		assert.equal(supportedPreparation(p), false);
-		assert.deepEqual(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), { cancel: true });
-		assert.deepEqual(p, before);
+		// fail open: no cancel, cleanup skipped
+		assert.equal(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), undefined);
+		assert.deepEqual(p, before, "unsupported preparation not mutated");
 	}
 	const p = preparation();
 	assert.equal(handlers.get("session_before_compact")({ preparation: p, branchEntries: [native()] }, ctx), undefined);
@@ -73,6 +84,7 @@ test("unsupported preparation shapes cancel atomically while supported aliases p
 	assert.notEqual(entries[0], entry);
 	assert.equal(entry.summary, native().summary);
 	assert.equal(entries[0].summary, GOAL);
-	assert.deepEqual(handlers.get("session_before_tree")({ preparation: { targetId: "target", userWantsSummary: true, entriesToSummarize: Object.freeze([entry]) } }, ctx), { cancel: true });
+	// frozen entries array: supportedTree returns false → skip, no cancel
+	assert.equal(handlers.get("session_before_tree")({ preparation: { targetId: "target", userWantsSummary: true, entriesToSummarize: Object.freeze([entry]) } }, ctx), undefined);
 	assert.equal(warnings.length, 2, "each unsupported shape diagnostic is delivered once");
 });

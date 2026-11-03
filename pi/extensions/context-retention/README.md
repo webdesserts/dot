@@ -12,13 +12,13 @@ The same pure policy is used on three surfaces:
 - `session_before_compact` cleans the existing preparation's previous summary and both history/split-prefix message arrays. It replaces its fresh file-operation sets with empty sets, so the new native compaction does not append another inventory or persist cumulative arrays. Native cut boundaries, tokensBefore, settings, provider routing/auth/env/headers, stream/retry callbacks and usage accounting remain native.
 - `session_before_tree` replaces elements of the existing entries array with cleaned clones, including removal of inherited native inventory arrays from cloned details. The selected raw messages/tool calls are not erased or renamed.
 
-The last two seams are **source-qualified in-place mutation**, not a documented preparation-result override. Handlers return no custom summary. Pi's documented cancellation result is used when compatibility cannot be established.
+The last two seams are **source-qualified in-place mutation**, not a documented preparation-result override. Handlers return no custom summary. On an unsupported shape, cleanup is skipped with a one-time warning and the handler returns nothing — native compaction or tree summary still runs.
 
-## Qualified SDKs and upgrade behavior
+## Upgrade behavior and shape compatibility
 
-The acceptance/deployment target is **Pi 1.4.0 only**, recorded in `hooks.ts`. Real native AgentSession/faux-provider consumers exercise manual/automatic/repeated/split/tree paths. Earlier 1.3.0 receipts are historical evidence, not a supported deployment target; the owner is upgrading sessions to 1.4.0. No broad version range is inferred.
+There is no version gate. Cleanup runs on any Pi SDK version.
 
-On an unqualified SDK, or an unsupported/frozen preparation shape, summary-producing compact/tree operations are cancelled with a bounded actionable diagnostic. Ordinary navigation without summarization is not blocked. Unknown-version ordinary projection makes no cleanup assumptions. An SDK upgrade therefore requires running/inspecting the consumers and updating the exact version set before activation, not merely retrying a cancelled operation.
+On an unsupported or frozen preparation shape, the handler skips retention cleanup, emits a one-time warning diagnostic ("retention cleanup skipped; compaction proceeds"), and returns nothing — native compaction or tree summary still runs. Cancellation is never issued for a shape compatibility problem.
 
 The compatibility dependence is that native compact retains the preparation **object** across the event, while native tree retains the entries **array**. Reassigning an event's preparation/array property is not equivalent. Structural checks complete before mutation; throws are not used to pretend to fail closed, because Pi's runner catches extension errors.
 
