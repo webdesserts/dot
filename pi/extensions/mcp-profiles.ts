@@ -38,7 +38,7 @@ export default function mcpProfiles(pi: ExtensionAPI) {
 			throw new Error("Invalid parent MCP profile");
 		}
 		const shared = new Set(["obsidian-memory", "nushell", "brave-search"]);
-		const bankNames = identity === "iris" ? ["hindsight-iris", "hindsight-shared"] : ["hindsight-peri"];
+		const bankNames = identity === "iris" ? ["hindsight-iris", "hindsight-shared", "feeds"] : ["hindsight-peri"];
 		const banks = new Map<string, ServerConfig>();
 		for (const [name, config] of Object.entries(profile.mcpServers)) {
 			if (shared.has(name)) continue;

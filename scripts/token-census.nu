@@ -96,6 +96,64 @@ def tool-census [files: list<string>, since_iso: string] {
   } | sort-by est_total_tokens_k -r
 }
 
+def autonomy-census [since_iso: string] {
+  let cfg_path = "/Users/nir/.autonomy/config.json"
+  let cfg = (try { open --raw $cfg_path | from json } catch { null })
+  let seats = (if $cfg == null { [] } else { $cfg.agents | columns })
+  let rows = ($seats | each { |seat|
+    let c = ($cfg.agents | get $seat)
+    let sd = ($c | get -o stateDir | default $"/Users/nir/.autonomy/agents/($seat)/state")
+    let tp = $"($sd)/turns.jsonl"
+    let turns = (if ($tp | path exists) {
+      open --raw $tp | lines | each { |l| try { $l | from json } catch { null } } | where { |t| $t != null and (($t.startedAt? | default "") >= $since_iso) }
+    } else { [] })
+    let rounds = ($turns | each { |t| $t.rounds? | default [] } | flatten)
+    let usages = ($rounds | each { |r| let u = ($r.usage? | default null); if $u == null { null } else if (($u | describe) | str starts-with "record") { $u } else { try { $u | from json } catch { null } } } | where { |x| $x != null })
+    let input = ($usages | each { |u| $u.inputTokens? | default 0 } | append 0 | math sum)
+    let cw = ($usages | each { |u| $u.cacheWriteTokens? | default 0 } | append 0 | math sum)
+    let cr = ($usages | each { |u| $u.cacheReadTokens? | default 0 } | append 0 | math sum)
+    let out = ($usages | each { |u| $u.outputTokens? | default 0 } | append 0 | math sum)
+    let cost = ($usages | each { |u| $u.costUsd? | default 0 } | append 0 | math sum)
+    let all_in = ($input + $cw + $cr)
+    let est_prompt = ($rounds | each { |r| $r.estimatedPromptTokens? | default 0 } | append 0 | math sum)
+    let reuse = ($rounds | each { |r| let d = ($r.ds4Reuse? | default null); if $d == null { null } else if (($d | describe) | str starts-with "record") { $d } else { try { $d | from json } catch { null } } } | where { |x| $x != null })
+    let hit = ($reuse | each { |x| $x.tokens.reused? | default 0 } | append 0 | math sum)
+    let miss = ($reuse | each { |x| $x.tokens.fresh? | default 0 } | append 0 | math sum)
+    let fcs = ($rounds | where { |r| ($r.firstChangedSlot? | default null) != null })
+    let hist_n = ($fcs | where { |r| ($r.firstChangedSlot | to json) | str contains "history" } | length)
+    {
+      seat: $seat
+      model: ($c | get -o model | default "?")
+      turns: ($turns | length)
+      rounds: ($rounds | length)
+      non_cache_in_M: ($input / 1e6 | math round --precision 2)
+      cache_write_M: ($cw / 1e6 | math round --precision 2)
+      cache_read_M: ($cr / 1e6 | math round --precision 2)
+      out_M: ($out / 1e6 | math round --precision 2)
+      cache_hit_pct: (if $all_in == 0 { null } else { ($cr / $all_in * 100) | math round --precision 1 })
+      ds4_est_prompt_M: ($est_prompt / 1e6 | math round --precision 2)
+      ds4_reuse_pct: (if ($hit + $miss) == 0 { null } else { ($hit / ($hit + $miss) * 100) | math round --precision 1 })
+      history_invalidation_pct: (if ($fcs | length) == 0 { null } else { ($hist_n / ($fcs | length) * 100) | math round --precision 1 })
+      est_cost_usd: ($cost | math round --precision 2)
+    }
+  })
+  let t_in = ($rows | each { |r| $r.non_cache_in_M } | append 0 | math sum)
+  let t_cw = ($rows | each { |r| $r.cache_write_M } | append 0 | math sum)
+  let t_cr = ($rows | each { |r| $r.cache_read_M } | append 0 | math sum)
+  let t_all = ($t_in + $t_cw + $t_cr)
+  let totals = {
+    turns: ($rows | each { |r| $r.turns } | append 0 | math sum)
+    rounds: ($rows | each { |r| $r.rounds } | append 0 | math sum)
+    non_cache_in_M: ($t_in | math round --precision 2)
+    cache_write_M: ($t_cw | math round --precision 2)
+    cache_read_M: ($t_cr | math round --precision 2)
+    out_M: ($rows | each { |r| $r.out_M } | append 0 | math sum | math round --precision 2)
+    cache_hit_pct: (if $t_all == 0 { null } else { ($t_cr / $t_all * 100) | math round --precision 1 })
+    est_cost_usd: ($rows | each { |r| $r.est_cost_usd } | append 0 | math sum | math round --precision 2)
+  }
+  {seats: $rows, totals: $totals}
+}
+
 def main [
   --since: string = ""    # ISO date (local); default = 7 days ago
   --json                  # print one record instead of tables
@@ -181,12 +239,15 @@ def main [
       }
   }
 
-  if ($priced | length) == 0 {
-    print $"No assistant requests in window ($since_iso) to ((date now | format date '%Y-%m-%d')) — nothing to count."
+  let autonomy = (autonomy-census $since_iso)
+  if ($priced | length) == 0 and ($autonomy.totals.turns == 0) {
+    print $"No assistant requests in window ($since_iso) to ((date now | format date '%Y-%m-%d')) and no Autonomy turns — nothing to count."
     return
   }
 
-  let totals = (do $sum $priced)
+  let totals = (if ($priced | length) == 0 {
+    {requests: 0, avg_req_per_5h: 0, total_M: 0, non_cache_in_M: 0, cache_write_M: 0, cache_read_M: 0, out_M: 0, cache_hit_pct: 0, cache_miss_pct: 0, est_cost_usd: 0}
+  } else { do $sum $priced })
   let by_model = ($priced | group-by model | transpose model rows | each { |g| {model: $g.model, price_known: ($g.rows | get price_known | all { |b| $b })} | merge (do $sum $g.rows) } | sort-by est_cost_usd -r)
   let by_lane = ($priced | group-by lane | transpose lane rows | each { |g| {lane: $g.lane} | merge (do $sum $g.rows) } | sort-by est_cost_usd -r)
   let by_day = ($priced | insert day { |r| $r.ts | str substring 0..9 } | group-by day | transpose day rows | each { |g| {day: $g.day} | merge (do $sum $g.rows) } | sort-by day)
@@ -198,13 +259,14 @@ def main [
     let dir = ("~/.claude/logs/token-census" | path expand)
     mkdir $dir
     $"(date now | format date '%Y-%m-%dT%H:%M:%S%z') ($summary_line)\n" | save --append $"($dir)/census.log"
-    {generated: (date now | format date "%Y-%m-%dT%H:%M:%S%z"), since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, unknown_price_models: $unknown_models} | to json | save -f $"($dir)/latest.json"
+    $"autonomy: ($autonomy.totals.turns) turns · ($autonomy.totals.rounds) rounds · est $($autonomy.totals.est_cost_usd) · cache-hit ($autonomy.totals.cache_hit_pct)%\n" | save --append $"($dir)/census.log"
+    {generated: (date now | format date "%Y-%m-%dT%H:%M:%S%z"), since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, autonomy: $autonomy, unknown_price_models: $unknown_models} | to json | save -f $"($dir)/latest.json"
   }
 
   if $json {
-    {since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, unknown_price_models: $unknown_models} | to json
+    {since: $since_iso, prices: $PRICES, totals: $totals, by_model: $by_model, by_lane: $by_lane, by_day: $by_day, autonomy: $autonomy, unknown_price_models: $unknown_models} | to json
   } else {
-    print $"Token census — ($summary_line)"
+    if ($priced | length) == 0 { print $"Claude Code: no assistant requests in window ($since_iso) — nothing to count." } else { print $"Token census — ($summary_line)" }
     print "(cache-read is billed at 10% of input; cache-write at 1.25× (5-min) / 2× (1-hour) input; costs are list-price estimates from the table at the top of the script)"
     if ($unknown_models | length) > 0 { print $"⚠ no price row for: ($unknown_models | str join ', ') — priced at the default row" }
     print ""
@@ -212,5 +274,9 @@ def main [
     print "Aggregate:"; print ([$totals] | table)
     print "By lane (session directory):"; print ($by_lane | table)
     print "By day (UTC):"; print ($by_day | table)
+    print ""
+    print "Autonomy Harness (turns.jsonl):"
+    print ($autonomy.seats | table)
+    print "Autonomy aggregate:"; print ([$autonomy.totals] | table)
   }
 }

@@ -1,5 +1,5 @@
 # Nushell Config File
-# Last updated against: 0.107.0
+# Last updated against: 0.117.0
 
 use ~/scripts/personal.nu *
 
@@ -46,7 +46,10 @@ $env.config = {
   history: {
     max_size: 10000
   }
-  keybindings: [
+}
+
+# Append custom keybindings onto defaults (`$env.config.keybindings = [...]` replaces all defaults in Nu >= 0.117).
+$env.config.keybindings ++= [
     {
       name: completion_menu
       modifier: none
@@ -91,7 +94,6 @@ $env.config = {
       }
     }
   ]
-}
 
 
 # ---------------------------------------------------------------------------

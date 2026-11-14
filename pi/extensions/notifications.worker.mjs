@@ -300,9 +300,11 @@ stdin.on("data", (chunk) => {
 				if (gen !== null) generation = gen;
 				busy = true;
 				clearIdleTimer();
+				reportFeedsPresence("thinking");
 			} else if (parsed.event === "agent_end") {
 				if (gen !== null) generation = gen;
 				busy = false;
+				reportFeedsPresence("idle");
 				if (mode === "goal") {
 					armGoalIfIdle();
 				} else if (mode === "ambient") {
@@ -322,6 +324,7 @@ stdin.on("data", (chunk) => {
 				holdUntil = hold !== null && hold > 0 ? hold : 0;
 				if (gen !== null) generation = gen;
 				busy = parsed.busy === true;
+				reportFeedsPresence(busy ? "thinking" : "idle");
 				clearIdleTimer();
 				if (mode === "goal") armGoalIfIdle();
 				// Ambient waits for its own gate (the 10s fallback) — the same
@@ -1577,10 +1580,79 @@ const sseMain = async (config) => {
 	stopRenewal();
 };
 
+// ── Feeds (:4610 / feeds.umbra.computer) parallel long-poll loop ──
+const FEEDS_BASE = (process.env.FEEDS_BASE ?? "http://127.0.0.1:4610").replace(/\/$/, "");
+const FEEDS_RECIPIENT = process.env.AUTONOMY_AGENT_ID ?? ACTOR;
+let lastFeedsSig = null;
+
+function reportFeedsPresence(status) {
+	if (!FEEDS_RECIPIENT || FEEDS_BASE === "0") return;
+	fetch(`${FEEDS_BASE}/api/presence`, {
+		method: "POST",
+		headers: { "content-type": "application/json", ...authHeaders() },
+		body: JSON.stringify({ agent: FEEDS_RECIPIENT, status }),
+		signal: AbortSignal.timeout(5_000),
+	}).catch(() => undefined);
+}
+
+const pollFeeds = async () => {
+	if (!FEEDS_RECIPIENT || FEEDS_BASE === "0" || BASE === FEEDS_BASE || BASE.includes("feeds.umbra.computer")) return;
+	while (running) {
+		try {
+			const res = await fetch(
+				`${FEEDS_BASE}/notifications?recipient=${encodeURIComponent(FEEDS_RECIPIENT)}&timeout=${POLL_HOLD_SECONDS}`,
+				{
+					headers: authHeaders(),
+					signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+				},
+			);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const data = await res.json();
+			const rows = Array.isArray(data.rows) ? data.rows : [];
+			const priority =
+				Array.isArray(data.priority_notifications) && data.priority_notifications.length > 0
+					? data.priority_notifications
+					: rows
+							.filter((r) => String(r.urgency).toUpperCase() === "HIGH")
+							.map((r) => ({
+								handle: r.id,
+								sender: r.sender,
+								place: r.feed,
+								text: r.summary,
+								resource_key: `${r.feed}#${r.message_id}`,
+							}));
+			const summary = data.summary ?? {};
+			if (priority.length === 0) {
+				lastFeedsSig = null;
+			} else {
+				const sig = stateSignature({ summary, total: priority.length }, priority);
+				if (sig !== lastFeedsSig) {
+					lastFeedsSig = sig;
+					const lines = priority.map(
+						(item) =>
+							`- [${item.handle}] ${item.sender ?? "?"} @ ${item.place ?? "?"} (${item.resource_key ?? "?"}): ${item.text ?? ""}`,
+					);
+					for (const [place, count] of Object.entries(summary)) {
+						lines.push(`- ${place}: ${count} low-priority`);
+					}
+					emit(
+						"wake",
+						`Feeds notifications (${FEEDS_BASE}, recipient=${FEEDS_RECIPIENT}):\n${lines.join("\n")}\n(Read/reply via feeds MCP or HTTP ${FEEDS_BASE}/api/feeds/<feed>/messages, then dismiss via POST ${FEEDS_BASE}/notifications/dismiss with {"recipient":"${FEEDS_RECIPIENT}","id":"<n_id>"})`,
+					);
+				}
+			}
+		} catch {
+			await sleep(ERROR_BACKOFF_MS);
+		}
+		await sleep(POLL_INTERVAL_MS);
+	}
+};
+
 // ── mode dispatch: SSE is the DEFAULT; the legacy long-poll requires an ──
 // explicit AUTONOMY_SSE_MODE=0 opt-out. Invalid SSE configuration is
 // heartbeat-only with a visible prerequisite failure — never a silent
 // legacy fallback.
+pollFeeds();
 const sseConfig = loadSseConfig(process.env);
 if (sseConfig && sseConfig.invalid) {
 	emit(
