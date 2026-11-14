@@ -1,27 +1,27 @@
 ---
 name: bdd
-description: "BDD spec workflow using Gherkin syntax. Use when working with .feature files, writing specs or scenarios, negotiating feature behavior with Given/When/Then, or planning features for personal projects."
+description: "Low-ceremony Gherkin specs (specs/*.feature) for negotiating and documenting durable user-observable behavior. Use when working with .feature files or clarifying complex feature contracts."
 ---
 
-# BDD specs
+# BDD (`specs/*.feature`)
 
-Use Given/When/Then scenarios to agree on meaningful behavior before implementing it. Focus on what users or API consumers can observe, including internal state that affects their experience.
+Gherkin (`Feature` / `Scenario` with `Given / When / Then`) gives complex or user-facing behavior a **durable, human-readable contract inside the repository** that stays legible long after design threads scroll away.
 
-BDD is useful when behavior is new, ambiguous or complex. Not every operational plan, internal edit or temporary check needs a spec section. A short statement of expected behavior may be enough.
+## 1. When Gherkin Earns Its Keep (and When to Skip It)
 
-## Workflow
+- **Good fit:** New product capabilities, multi-state workflows, subtle CLI/API edge cases, or cross-component interactions where aligning on observable outcomes *before* writing code prevents rework and documents intent for future maintainers.
+- **Skip the ceremony:** Internal refactors, performance tuning, straightforward bug fixes, and operational chores rarely benefit from `.feature` files — a clear brief and targeted unit/regression test communicate the contract with less overhead.
 
-1. Read the relevant existing specs and clarify the intended change.
-2. For a behavior change, update the spec before implementation so the difference is explicit. In personal projects, keep accepted scenarios in `specs/*.feature`.
-3. Assess discovered edge cases by consequence, likelihood and cost. Add a scenario when it represents agreed behavior; otherwise record, defer or discard it rather than inventing a requirement.
-4. Verify agreed scenarios at the smallest reliable owning boundary. Use cross-system checks only where the interaction needs them.
+## 2. Writing Scenarios That Survive Refactors
 
-Use realistic examples; synthetic or minimized data is appropriate when it preserves the behavior under discussion. Do not duplicate every scenario across test layers.
+- **Describe observable state and outcomes, not implementation:** Phrase `Given` (initial domain state), `When` (user or API caller action), and `Then` (observable result, persisted effect, or surfaced error) in domain terms rather than CSS selectors, private helper names, or wire internals.
+- **Concrete examples over abstract prose:** One realistic example of a boundary condition (an expired token, a conflicting edit, an empty directory) exposes ambiguity faster than a paragraph of prose.
+- **Update specs alongside intentional behavior changes:** Keep `specs/*.feature` aligned with current agreed behavior and prune superseded scenarios so the directory remains trustworthy documentation rather than historical sediment.
 
-## Challenge the agreement
+## 3. Surfacing Ambiguity Without Inventing Scope
 
-The orchestrator negotiates behavior with Michael; a Worker, Scout or Claim Reviewer can help expose gaps. Ground questions in existing scenarios, source and realistic use. Look for contradictory expectations, implicit assumptions and consequential empty/error/concurrent/permission cases. Label a missing requirement as a question until the owner agrees on the behavior; do not turn every conceivable edge into a new criterion.
+Scenario drafting (typically during design or orchestration) is a tool for discovering hidden assumptions early:
 
-Separate blocking contradictions, meaningful ambiguity and optional improvements. Explain the consumer consequence and smallest clarification. When the remaining critique is cosmetic or speculative, say the behavior is clear enough to proceed rather than manufacturing another refinement round. No separate Analyst seat or mandatory adversarial stage is required.
-
-The testing skill owns risk-based check selection and stopping rules. Keep specs concise and current; do not retain obsolete scenarios as conflicting instructions.
+- Look for contradictions with existing scenarios and consequential gaps around empty inputs, failure recovery, permissions, or concurrent access.
+- Surface genuinely ambiguous product choices to the project owner as concrete questions (with consumer impact and options) rather than silently turning every imaginable edge case into a requirement.
+- Verify accepted scenarios at the **smallest boundary that owns the behavior** (unit, CLI, or integration) rather than duplicating every `.feature` scenario as a slow end-to-end test.

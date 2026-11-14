@@ -1,47 +1,37 @@
 ---
 name: testing
-description: "Testing guidelines and philosophy. Use when writing, modifying, or reviewing tests, working with test files, deciding what kind of tests to write, adding snapshot or visual tests, or discussing test strategy and edge cases."
+description: "Risk-proportionate testing strategy, boundary selection, and blessed test tooling across TypeScript, Rust, UI, and Nushell. Use when writing, reviewing, or scoping tests."
 ---
 
 # Testing
 
-Test behavior that matters to the person or developer using the product. Use concrete examples; small synthetic fixtures and mocks are useful when they faithfully represent that behavior.
+Tests earn their keep when they protect **user- or caller-observable behavior at the smallest boundary that owns the risk**, without turning test scaffolding into a second product to maintain.
 
-## Choose checks by risk
+## 1. Scope by Risk and Owning Boundary
 
-Before adding coverage, identify what could fail, who would be affected, and the likely consequence. Consider exposure, reversibility, expected lifetime and maintenance cost. Choose the cheapest reliable evidence for that risk; a short explanation is usually enough.
+Before adding checks, weigh what can fail, how silent or irreversible that failure would be, and what maintaining the test costs:
 
-- Put detailed correctness checks at the smallest boundary that owns the behavior.
-- Use cross-system tests when the interaction is the risk, not to repeat every lower-level case.
-- Temporary adapters and personal tools usually need a workflow smoke check and important failure checks, not exhaustive tests of their host.
-- Data loss, unauthorized effects and difficult recovery deserve targeted safeguards even in temporary work.
+- **Smallest owning boundary:** Verify parsing, state transitions, and error variants directly through the owning module's public API. Save cross-system or process-level integration tests for risks that actually live in wiring, persistence, IPC, or CLI contracts rather than re-running every unit branch end-to-end.
+- **Weight toward irreversible consequences:** Data loss, corrupted migrations, auth/privacy leaks, and silent fallbacks warrant targeted regression guards even in small tools; low-blast-radius formatting or throwaway glue usually needs only a focused workflow check.
+- **Stopping point:** Once agreed contracts and material failure modes have clear evidence, stop adding permutations. If test harness complexity starts outgrowing the change itself, pause and reassess scope with the project owner.
 
-A conceivable edge case is not automatically a requirement. Check relevant BDD specs and agreed criteria; add scenarios only when they describe accepted behavior.
+## 2. One Tool per Problem
 
-Stop expanding coverage when the agreed behavior and material risks have adequate evidence. If scaffolding or repeated reviews cost more than the confidence they add, narrow the next check or propose deferral. Escalate unresolved changes to agreed requirements; do not silently waive them.
+Using a single default runner per boundary keeps repos consistent and avoids overlapping dependencies:
 
-## Write useful tests
+- **Core TypeScript, Node services & CLIs (`node:test` + `node:assert/strict`):** Built into Node `26+` with zero extra dependencies (`t.test`, `t.mock.fn()`, `t.mock.timers`). *(Type-narrowing quirk: `@types/node` types `assert.deepEqual(actual, expected)` as `asserts actual is T`, so `assert.deepEqual(arr, [])` narrows a mutable `arr` to `never[]`; assert `arr.length === 0` when `arr` is mutated later in the test.)*
+- **Frontend UI & React components (`vitest` + `@testing-library/react`):** Fast in-process checks driven through user-visible roles, labels, and `user-event` interactions rather than internal component state.
+- **Rendered browser & layout checks (`Playwright`, interactive/manual first):** `jsdom` cannot compute real CSS layout, scrolling, or viewport overflow. Use Playwright or headless Chromium screenshots to inspect rendered desktop/mobile states directly, keeping automated browser E2E suites lean because of their runtime and flake cost.
+- **Rust unit, integration & CLI suites (`cargo nextest` + `cargo test --doc`):** Consolidate integration tests under a single `tests/integration/main.rs` target (avoiding per-file `tests/*.rs` link bloat), exercise CLIs via `CARGO_BIN_EXE_<name>`, isolate state with `tempfile::TempDir`, and pair `cargo nextest run` with `cargo test --doc` when crates carry rustdoc examples (`nextest` does not execute doctests).
+- **Nushell scripts (`std/assert`):** Built-in `use std/assert` (`assert equal`, `assert str contains`).
+- **Opt-in snapshots & property checks:**
+  - **CLI, parser & diagnostic snapshots (`insta` in Rust; `t.assert.snapshot` / `toMatchInlineSnapshot` in TS):** High-signal when formatted CLI transcripts, compiler/parser trees, or error diagnostics *are* the user contract (keeping scenarios readable inline); avoid snapshotting large internal structs or volatile fields that churn on benign edits.
+  - **Property-based checks (`proptest` / `fast-check`):** Worth opting into for codecs, parsers, CRDTs, and state machines where edge cases hide in input combinations.
 
-Name tests for the behavior and expected outcome. Prefer public or owning-library interfaces over copied implementation logic. Isolate mutable state in memory or uniquely owned temporary data. Mock external boundaries rather than deep internals.
+## 3. Anti-Vacuity, Determinism & Honest Failures
 
-Use deterministic events or clocks instead of sleeps where practical. Keep setup and assertions readable; comments should explain a non-obvious rule, not restate the code.
+- **Test real behavior, never source substrings:** Assert on returned `Result` values, persisted SQLite/filesystem state, exit codes, HTTP responses, or rendered DOM — never write pseudo-tests that grep source files to check that code was edited. Use fixture values distinct from fallback defaults so broken fallback branches cannot pass green, and watch new regression tests fail against the unfixed bug first.
+- **Hermetic state & deterministic clocks:** Isolate filesystem/config state in memory or temp directories via injected path roots or child-process `Command::env` `XDG_*` overrides (avoiding live `~/.config` / `~/.local/state` and Rust Edition 2024's `unsafe` in-process `std::env::set_var`), and drive timers deterministically (`t.mock.timers`, `vi.useFakeTimers()`, `tokio::time::pause()`) instead of `sleep()` loops.
+- **Treat failures as signals:** Diagnose why a check failed or flaked before touching expectations. Never delete, skip, or weaken an existing test to get green without explicit owner approval, and distinguish executed test runs from static source inspection when reporting status.
 
-For a behavioral fix, prefer a regression test that fails for the actual defect and passes after correction. Compilation failure alone does not demonstrate a behavioral guard. Tests may arrive with signature or type changes; say what was actually observed.
-
-## Treat failures honestly
-
-Classify the failure before changing code or expectations. Fix the cause, not merely the test result. Do not retry an unchanged failure until it passes or repair unrelated behavior to hide it.
-
-Flaky tests are defects to investigate. Removing tests requires explicit user consent; do not delete a failing check because it is inconvenient. Flag obsolete or incorrect tests and resolve the intended behavior.
-
-Preserve relevant failed results. Distinguish executed checks from source inspection, simulation and unverified claims.
-
-## Visual and output checks
-
-When appearance or interaction changes, inspect the rendered result. Add visual or output snapshots when they provide stable, useful regression coverage; they are not mandatory for every component.
-
-Review meaningful snapshot differences before accepting them. On a screenshot failure, inspect the reference, actual and difference images. Treat CLI output as an interface too, using focused output checks where its contract matters.
-
-At a significant milestone or overrun, note which checks found real problems and which added little value. Use that evidence to choose the next checks, not to add another routine review layer.
-
-See the BDD skill for behavior negotiation and [[Testing]] for test-type definitions.
+> Related: `skill:bdd` for negotiating user-observable scenarios in `specs/*.feature`, and [[Testing]] for glossary and stack details.

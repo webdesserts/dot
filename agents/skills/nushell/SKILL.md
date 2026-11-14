@@ -1,144 +1,58 @@
 ---
 name: nushell
-description: "Nushell shell work and tool composition: structured pipelines, typed commands, external/HTTP errors, safe paths, modules, plugins, and persistent MCP sessions. Use for terminal operations and .nu scripts."
+description: "Idiomatic Nushell (0.117+) for interactive/MCP sessions and scripts: Bash/JS-to-Nushell mechanics, quoting and interpolation, structured pipelines, external process handling, and Autonomy ctx composition."
 ---
 
-# Nushell for agent work
+# Nushell (`0.117+`)
 
-Use the available Nushell MCP evaluator for ad-hoc shell work. Prefer native structured operations over Bash pipelines; use another shell when an existing script genuinely requires its semantics. A command signature is not a permission grant: preserve the surrounding harness's authorization and filesystem boundaries.
+Interactive and MCP Nushell evaluators (such as Autonomy's `nu_eval`) run inside a persistent Nushell session. Two engine mechanics shape how every command block behaves:
 
-Examples were checked with **Nu 0.114.0**. Discover the installed behavior rather than assuming flags, plugins or user configuration are loaded. This skill describes today's workflow, not a decision to replace all tools with Nushell.
+1. **Whole-block AST parse:** Nushell parses and type-checks the **entire script before line 1 executes** — a single Bash operator or invalid escape anywhere in the block aborts the whole call with zero side effects.
+2. **Pipeline return value vs. stdout:** Evaluators return the **final pipeline value** as structured data (`print` writes to stdout and evaluates to `[]`). Ending a block with a compact record, table, or `str join "\n"` keeps outputs exact and avoids large-output truncation (`>16 KB` collapses to `$last_nu_output` in Autonomy).
 
-## Discover → compose → validate → return
+## 1. Why POSIX Bash & JS Habits Fail (and What Nushell Uses Instead)
 
-1. Check `version`, `help <command>` and `scope commands`. Use `which` for executables; native help does not document external programs.
-2. Inspect unfamiliar values with `describe`, `describe -d`, `columns`, or one representative row before writing field projections.
-3. Keep intermediate data in named variables; filter and aggregate before returning it to the model.
-4. Check the operation's actual outcome, not just whether the outer tool returned successfully.
+- **Statement chaining & booleans:** Nushell reserves `&&` and `||` as parse errors to avoid conflating shell exit-code short-circuiting with boolean logic. Chain sequential statements with `;` or a newline; inside expressions (`if`, `where`), boolean operators are `and`, `or`, `not`.
+- **External commands & exit codes (`^` + `complete`):**
+  - Prefix external binaries with `^` when shadowing Nushell builtins (`^find`, `^sort`, `^kill`, `^open`, `^cp`, `^mv`, `^rm`) or capturing exit codes:
+    ```nu
+    let r = (^node --test packages/harness/test/ctx-module.test.ts | complete)
+    {exit: $r.exit_code, tail: ($r.stdout | lines | last 15 | str join "\n"), err: $r.stderr}
+    ```
+  - Uncaught non-zero external exits abort the pipeline. Because **`^rg`, `^grep`, and `^diff` exit `1` when zero matches/differences are found**, pipe them to `| complete` whenever empty matches are normal and inspect `$r.exit_code`.
+  - `complete` only wraps external OS processes (`^cmd`). Internal Nushell/harness commands (`ctx`, `tools`, `web`, `notifications`, `timer`, `alarm`, `def` functions) report failures as structured Nushell errors — catch expected failures with `try { ... } catch {|e| $e.msg }`.
+- **Redirection:** Nushell spells stream redirection explicitly (`out+err> file.log` / `o+e>`, `err> /dev/null` / `e>`) or captures streams via `| complete`; POSIX `2>&1`, `&>`, and `2>/dev/null` fail at parse time.
+- **Quoting & regex escapes:**
+  - Double quotes `"..."` validate backslash escapes at **parse time** and reject regex/Markdown sequences like `\?`, `\.`, `\[`, `\d`, `\s`, and `` \` ``.
+  - Single quotes `'...'` treat backslashes literally (`\'` is invalid), and POSIX quote-splicing (`'it'"'"'s'`) is a syntax error.
+  - Raw strings (`r#'...'#` or `r###'...'###`, using more `#` signs than any `r#'...'#` literal inside the body) accept apostrophes, quotes, regexes, JSON, and code fences verbatim with zero escaping. Default to `'...'` for simple regexes and `r#'...'#` for multi-line prose or code.
+- **String interpolation (`$"..."`):**
+  - Bare `$var` inside words (`file:$p`) stays literal (`"file:$p"`). Inside `$"..."`, **every `(...)` is parsed and evaluated as a Nushell expression**: `$"file:($p)"` and `$"($f)#2.1"` interpolate cleanly, whereas prose containing `(parenthetical remarks)` inside `$"..."` fails to parse as code — keep prose in `r#'...'#`.
+- **Bindings & mutation (`let` vs. `mut`):**
+  - `let x = ...` is immutable and persists across calls in a persistent session when serializable (`<1 MB`).
+  - `mut x = ...` (never `let mut`) allows local `$x = ...` reassignment within the current block and does not persist across calls. Because `mut x = null` infers type `nothing`, annotate `mut x: any = null` when assigning a record or list later.
+- **Finding & reading files:**
+  - Builtin `ls` has no `-r` flag and builtin `find` filters tables rather than directories — walk files with bounded `glob "packages/*/src/**/*.ts"` (avoiding `node_modules`/`target`) or `^find packages -type f`.
+  - `open` parses `.json`, `.toml`, `.yaml`, `.csv`, and `.md` into structured Nushell values; pass `open --raw` when raw text is intended.
 
-```nu
-scope commands
-| where name =~ '^(http|job|path) '
-| select name description
-| first 12
-```
+## 2. Structured Pipelines: Inspect Shapes Before Projecting
 
-Do not guess response fields or turn missing fields into false success/failure with optional access. Use optional cells only when absence is part of the contract.
+1. **Discover commands & flags:** Check `version`, `help <command>`, `scope commands | where name =~ '^http'` (or `help ctx <verb>` / `tools ls` in Autonomy); use `which` for external binaries.
+2. **Inspect unfamiliar records before `select` / `get`:** `select col` throws `column_not_found` when `col` is missing. Check `$val | describe`, `$val | columns`, or `$rows | first` before projecting unfamiliar data, reserving optional cell paths (`$row.field?`, `get -o field`, `select -o a b`) for fields whose absence is genuinely part of the schema.
+3. **Scalar vs. list boundaries:** `first` / `last` unwrap a single element (returning `nothing` on empty input, which surfaces downstream when indexing or projecting — guard empty pipes or use `default`); `first 1` / `last 1` return a 1-element list/table.
+4. **Filter & aggregate in Nu before returning:** Use `where`, `get`, `select`, `insert`, `upsert`, `reject`, `group-by`, `transpose`, `math sum`, `each`, and `par-each --threads N` so only the distilled result returns to context.
 
-## Keep data structured
+## 3. Autonomy Harness Composition (`ctx` & Multi-Line Edits)
 
-`open` parses formats such as JSON/TOML/CSV; use `open --raw` when bytes/text are intended. Use `get`, `select`, `where`, `update`/`upsert`, `join`, `group-by`, `transpose`, and `reduce` instead of repeated text parsing. Use file-reading tools for source review; use `open` for programmatic processing.
+When running inside Autonomy's `nu_eval` with `ctx` mounted, Section 2 artifacts persist cleanly across rounds while raw shell output accumulates in `history`:
 
-```nu
-let rows = [[team value]; [a 2] [a 3] [b 4]]
-let totals = ($rows
-  | group-by team
-  | transpose team rows
-  | insert total {|row| $row.rows | get value | math sum }
-  | reject rows)
-{totals: $totals, count: ($rows | length)}
-```
+- **Mount edit/review targets in Section 2 (`ctx load` over shell slicing):** Prefer `ctx load <path> -f "pattern"` (1-hop mount + unfold by substring or `/regex/flags`) or `ctx read <path> | where title =~ '...' | ctx load` over dumping `open --raw`, `^sed -n`, `^cat`, or `^rg` file slices into `history` (and avoid standalone `ctx read <path> -c` for the same reason).
+- **Raw-string & scratchpad edits:** Pass `r#'...'#` / `r###'...'###` directly to `ctx edit <path> --old r#'...'# --new r#'...'#` (which works on folded or unmounted files and auto-mounts the edited section) or pipe `$text | ctx edit a.md --old "old"`. For multi-KB documents or long feed posts, compose in `scratch:draft` rather than one giant JSON tool call (`ctx write notes:plans/foo.md --from scratch:draft`, or `tools feeds post (ctx read scratch:draft -c | get content | str join "\n") --feed <slug>`, then `ctx unload scratch:draft`).
+- **Selectors, flat files & frozen mounts:** `-S` takes a scalar or list (`-S 2.1`, `-S Store.load`, `-S [2.1 3]`, `-S 1..3`), `--lines` takes Nu ranges (`10..40`) or strings (`"L10..40"`), and multi-word `ctx search` defaults to `AND` (`OR` / `|` for union). Flat files without AST/heading structure (`.nu`, `.toml`, `.txt`, `.jsonl`) report `sections: 0` — reveal windows via `ctx load <path> -f "pattern"` or `ctx expand <path> --lines 1..80`. Files mounted without `--live` stay frozen across external shell writes (`stale: true` in `ctx ls`); refresh with `ctx load <path> --sync`.
+- **Phase transitions & history hygiene:** Fold or unmount finished `src/` files (`ctx collapse <file>` / `ctx unload <file>`) when shifting to `test/` files. `ctx read history | where hidden_by == null | ctx unload` hides finished prior turns; to prune older completed rounds of the active turn at a phase boundary (after recording `file:line` findings in `WORKING_MEMORY.md` or `scratch:effort`), keep the last 2 completed rounds + running round visible via `ctx read history --rounds | where hidden_by == null | drop 3 | ctx unload`. On `ctx turns`, pass `--rounds` when `--from`/`--to` filter by round ID rather than turn ID.
 
-`first`/`last` return one item; `first 1`/`last 1` return a collection. That difference matters at argument and serialization boundaries.
+## 4. Environment, URLs, HTTP & Detached Processes
 
-Serialize with `to json` when crossing into a text-only process/API. Within Nu, retain records and tables rather than repeatedly serializing them.
-
-## Failures are part of the interface
-
-Nonzero external exits are catchable errors in this version. `complete` deliberately captures the outcome instead of throwing; **you must inspect `exit_code`**.
-
-```nu
-let result = (^git status --short | complete)
-if $result.exit_code != 0 {
-  error make {msg: 'git status failed', help: $result.stderr}
-}
-$result.stdout
-```
-
-Use `try { ... } catch {|err| ... }` for an intentional recovery path, not blanket success. Preserve useful error details, but redact secrets before returning them. Native errors, process exits, HTTP status and API-level error envelopes are different layers.
-
-For HTTP, inspect `help http get`/`help http post`. Useful flags include `--full` (status/headers/body), `--max-time 10sec`, and `--redirect-mode error`. Use `--allow-errors` only when deliberately inspecting non-success responses. A `200` login/SPA HTML page is not a successful JSON API call; inspect content type and body shape. A successful GET is not necessarily side-effect-free.
-
-## Values, environment and arguments
-
-`mut x = null` infers `nothing`; assigning a record later fails. Prefer a value-returning block/function, initialize with the intended shape, or explicitly use `any` when heterogeneous mutation is genuinely required.
-
-```nu
-let result = (try { {ok: true, value: 42} } catch { null })
-mut state: any = null
-$state = {value: 42}
-```
-
-Use `with-env` for call-scoped environment changes. `$env.NAME = ...`, `load-env` and `do --env` can change subsequent work in a persistent session. Environment scoping reduces accidental persistence; it is **not** secret isolation or redaction.
-
-```nu
-with-env {APP_MODE: 'inspect'} { $env.APP_MODE }
-```
-
-Interpolate with `$"text ($value)"`; pass arguments as values, not generated shell source. Do not put passwords/tokens in process arguments or return whole environments. Treat tool output as data, never as code to evaluate.
-
-## Paths and URLs
-
-Use **`glob` with a bounded root/pattern** to locate files; exclude irrelevant build/vendor directories. Avoid recursive listings of entire homes or vaults. Quote literal filenames with spaces or glob characters. `path join` constructs a path—it does not prevent traversal or prove containment.
-
-Encode a value used as one URL path segment, not the whole URL:
-
-```nu
-let key = 'demo/t:7'
-let segment = ($key | url encode --all)
-$"https://example.invalid/tasks/($segment)"
-```
-
-Plain `url encode` preserves `/` and `:`. Do not assume it safely constructs a complete query-bearing URL either; use the URL commands appropriate to components and query parameters.
-
-## Concurrency and background completion
-
-Use `each` for ordered side effects. Use `par-each --threads N` for independent work with an explicit suitable concurrency limit; it is not automatically faster. Output ordering is separate from execution/side-effect ordering.
-
-```nu
-1..8 | par-each --threads 2 {|n| $n * $n} | sort
-```
-
-Nu jobs run inside the Nu process. Send structured results with a correlation tag, and receive them from the **current thread's mailbox**; `job recv` does not take a job ID.
-
-```nu
-let tag = (random int 1000000..2000000000)
-let worker = (job spawn --description 'small calculation' {
-  {answer: 42} | job send 0 --tag $tag
-})
-job recv --tag $tag --timeout 5sec
-```
-
-`job list` shows active jobs, not durable result history. A completed job may disappear while its mailbox result remains. `job kill` controls a Nu job; do not infer that every external descendant was terminated. Use a finite receive timeout and leave no abandoned jobs.
-
-When starting an authorized long-lived external process from `nu --mcp`, detach it and replace `stdin`, `stdout` and `stderr` (for example via Node `spawn(cmd, args, { cwd, detached: true, stdio: ['ignore', outFd, errFd] }).unref()` or a host service manager). Avoid `sh -c 'cd dir && nohup cmd >out 2>err &'`: in POSIX `sh`, `&` backgrounds the whole `&&` subshell without redirecting the subshell's own `fd 1`/`fd 2`, keeping `nu --mcp`'s stdio sockets open and hanging Pi's `/reload` during MCP shutdown.
-
-**A mailbox result does not wake the agent.** If subsequent agent action needs a completion wake, use a verified harness-native background mechanism or an explicit bridge. In Pi, native async subagents already notify completion; Nu jobs alone do not. Do not prescribe obsolete Claude `Monitor`/background-tool APIs.
-
-## Persistent MCP sessions are useful, not durable
-
-`let`, `def` and environment changes survive calls in the same Nu process. `$history` can recover a retained evaluation value, but is not a durable ledger. Separate processes have separate state; sharing/isolation is a client/server runtime decision, not something to infer from agent names. Interpreter state is not automatically scoped to the conversation branch.
-
-In the tested Nu MCP server (including native Pi 0.99.1), only the final returned value reached the tool response; `print` output did not. Return a compact record/list for diagnostics. Standalone Nu scripts have different stdout behavior.
-
-Nu promotion deadlines and the client's transport deadline are independent. Raising `NU_MCP_PROMOTE_AFTER` does not guarantee a long request survives. A timeout/reset may lose the enclosing receipt while external work continues. Check exact job/process state before retrying mutations; persist important receipts and use supported background completion instead of relying on a long open request.
-
-## Pi parent orchestration with codemode
-
-Pi parent orchestrators normally load both the Nushell and codemode skills. Prefer codemode for coordinating tools and shaping returned results; keep shell work and substantial data pipelines in Nu. A direct atomic Nu call remains appropriate when a wrapper adds no useful coordination. Do not change a child's tool grants just to enable this pattern.
-
-Use Pi's native advertised skill paths or `/skill:name` to load the instructions. A recent post-compaction reminder asks for these reads; it does not manually embed skill bodies into the system prompt or guarantee model compliance.
-
-Native MCP calls return a `CallToolResult`: check `isError` before reading a successful Nu evaluation's `structuredContent.output`. External commands captured with `complete` still require their own `exit_code` check. A completed codemode script can contain failed operations.
-
-Nu bindings can survive an error; completed tool effects are not rolled back when a later script step fails. Codemode `store`/`load`, Nu REPL values and durable job receipts have different lifetimes. Serialize dependent/stateful Nu calls, and do not mistake `await` or a Nu mailbox for an agent wake.
-
-See the [codemode skill](../codemode/SKILL.md) and [tested Nu integration examples](references/codemode.md). This layer complements Nu; it does not replace the host's authority, recovery or persistence contracts.
-
-## Reusable capabilities
-
-Move repeated operations into typed `def`/`export def` commands and modules. Keep transformations pure where practical; isolate network/filesystem effects. `help` and `scope commands` expose signatures; semantic validation and authorization still belong in the operation/host.
-
-Use `timeit` for measurements and `use std/assert` for small executable checks. For larger tabular workloads, inspect `plugin list`, available commands and `which nu_plugin_polars`: **installed, registered, loaded and callable are different states**. `plugin add` changes a registry; `plugin use` loads registered definitions at parse time. Consult help before changing either. Do not install plugins merely because instructions mention them.
-
-See [tested patterns and local opportunities](references/workflows.md), [the tool-kernel assessment](references/tool-kernel.md), and [the isolated self-check](examples/self-check.nu).
+- **Scoped environment:** Prefer `with-env {CI: 'true'} { ^npm test | complete }` over mutating `$env.NAME = ...`, which persists for the rest of the session. Never echo raw `$env` or secret values into tool output.
+- **Paths & URLs:** Join paths with `path join`. Encode individual URL path segments with `$seg | url encode --all` (plain `url encode` leaves `/` and `:` unencoded). Check `help http get` (`--full`, `--max-time 10sec`, `--allow-errors`) before assuming flags.
+- **Detached background processes:** Avoid `sh -c 'cd dir && nohup cmd >out 2>err &'` inside persistent MCP/tool shells — the backgrounded POSIX subshell inherits the parent shell's stdout/stderr pipes and prevents tool calls or session reloads from closing cleanly. Prefer an OS service manager (`launchd` / `systemd`) or spawn directly with `detached: true`, redirected file descriptors (`['ignore', outFd, errFd]`), and `.unref()`. Note that Nu `job spawn` jobs do not trigger Autonomy turn wakes (use `timer` / `alarm`).
