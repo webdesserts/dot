@@ -33,5 +33,6 @@ Type assertions (`x as Foo`) silence the compiler without validating data at run
 
 - **Pure Oxc (`oxfmt` + `oxlint` `typeAware: true`):** Default TypeScript libraries to `oxfmt` (formatting + import/package sorting) and `oxlint` with `options.typeAware: true` (`oxlint-tsgolint`) and `denyWarnings: true` — mechanically catching `no-explicit-any`, `consistent-type-assertions` (`assertionStyle: "never"`, allowing `as const`), `switch-exhaustiveness-check`, `no-floating-promises`, and `import/no-cycle`.
 - **Single-source-of-truth docs:** Keep root `README.md` focused on what the package solves, installation, and quickstart, with detailed public interface docs in `docs/api/*.md` covering strictly exported symbols. Keep API references in the repo rather than duplicating them into external notes where they can drift.
+- **Internal `@webdesserts/*` dependencies:** Reference internal `@webdesserts/*` packages via immutable GitHub version tags (e.g. `"github:webdesserts/app-config#v0.1.0"`), never npm registry semver ranges or mutable branch names.
 
 > Deeper reference (Node native type-stripping flags, `@types/node` assertion narrowing gotchas, `generateTrace` profiling): see [[TypeScript]].
