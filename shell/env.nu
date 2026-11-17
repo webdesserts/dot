@@ -128,7 +128,14 @@ def parse-secrets [file: path] {
   | where { |l| ($l | str contains '=') and (not ($l | str trim | str starts-with '#')) }
   | each { |l| $l | str replace -r '^\s*export\s+' '' }
   | parse "{key}={value}"
-  | reduce -f {} { |row, acc| $acc | insert ($row.key | str trim) $row.value }
+  | reduce -f {} { |row, acc|
+      # Strip one pair of matching surrounding quotes (KEY='v' / KEY="v"), as bash would.
+      let v = ($row.value | str trim)
+      let unquoted = if ($v | str length) >= 2 and ((($v | str starts-with "'") and ($v | str ends-with "'")) or (($v | str starts-with '"') and ($v | str ends-with '"'))) {
+        $v | str substring 1..-2
+      } else { $v }
+      $acc | insert ($row.key | str trim) $unquoted
+    }
 }
 
 let secrets_file = ("~/.config/secrets.env" | path expand)
