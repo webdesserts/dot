@@ -74,7 +74,8 @@ def get-bitbucket-repo []: nothing -> record {
   let remote_url = (git remote get-url origin | str trim)
 
   # Handle SSH format: git@bitbucket.org:workspace/repo.git
-  let parts = ($remote_url | parse "git@bitbucket.org:{workspace}/{repo}.git")
+  # Also accept ssh.bitbucket.org (Bitbucket's new SSH host; insteadOf rewrites show up here)
+  let parts = ($remote_url | parse --regex '^git@(?:ssh\.)?bitbucket\.org:(?<workspace>[^/]+)/(?<repo>[^/]+?)\.git$')
 
   if ($parts | is-empty) {
     error make {msg: "Could not parse Bitbucket remote URL. Expected format: git@bitbucket.org:workspace/repo.git"}
@@ -224,7 +225,7 @@ def md-tree [items: list]: nothing -> list {
   if ($items | is-empty) { return [] }
   let base = ($items | first | get indent)
   mut result = []
-  mut cur = null
+  mut cur: any = null
   mut kids = []
   for it in $items {
     if $it.indent <= $base {
@@ -597,7 +598,7 @@ def md-to-adf [md: string]: nothing -> record {
     if ($filter | is-empty) {
       $all_fields | select id name custom
     } else {
-      $all_fields | where ($it.name | str lowercase | str contains ($filter | str lowercase)) | select id name custom
+      $all_fields | where ($it.name | str downcase | str contains ($filter | str downcase)) | select id name custom
     }
   }
 
@@ -659,18 +660,35 @@ export def "bitbucket pr" [] {
 #   bitbucket pr list --source "feature/LOR-4838"        # Filter by source branch
 #   bitbucket pr list --destination "main"               # Filter by destination branch
 #   bitbucket pr list --state OPEN --search "fix bug"    # Combined filters
+#   bitbucket pr list --reviewer me --all --approvals    # PRs I'm a reviewer on, with approval state
 export def "bitbucket pr list" [
   --state: string = "OPEN"       # PR state: OPEN, MERGED, DECLINED, SUPERSEDED
   --search: string = ""          # Search text in title or description
   --source: string = ""          # Filter by source branch name
   --destination: string = ""     # Filter by destination branch name
+  --reviewer: string = ""        # Only PRs with this reviewer: "me" or a Bitbucket user UUID ("{...}")
+  --approvals                    # Add reviewers (name/approved/state) and my_approved columns
   --all                          # Fetch all pages (default: first page only, max 1000 items)
 ]: nothing -> table {
   let headers = (get-bitbucket-headers)
   let repo = (get-bitbucket-repo)
 
+  # Reviewer filtering happens server-side via Bitbucket's `q` query language.
+  # Participants (role + approval) are only returned when requested via `fields`.
+  let reviewer_uuid = if ($reviewer | is-empty) { "" } else if $reviewer == "me" {
+    get-bitbucket-user-uuid
+  } else { $reviewer }
+  let me_uuid = if $approvals { get-bitbucket-user-uuid } else { "" }
+  let fields_param = if $approvals { "&fields=%2Bvalues.participants" } else { "" }
+  let filter_param = if ($reviewer_uuid | is-empty) {
+    $"state=($state)"
+  } else {
+    let q = ($"state=\"($state)\" AND reviewers.uuid=\"($reviewer_uuid)\"" | url encode)
+    $"q=($q)"
+  }
+
   mut all_prs = []
-  mut next_url = $"/pullrequests?state=($state)&pagelen=20"
+  mut next_url = $"/pullrequests?($filter_param)&pagelen=50($fields_param)"
   let max_items = 1000
 
   loop {
@@ -704,8 +722,8 @@ export def "bitbucket pr list" [
     $prs
   } else {
     $prs | where {|pr|
-      let title_match = ($pr.title | str lowercase | str contains ($search | str lowercase))
-      let desc_match = ($pr.description | str lowercase | str contains ($search | str lowercase))
+      let title_match = ($pr.title | str downcase | str contains ($search | str downcase))
+      let desc_match = ($pr.description | str downcase | str contains ($search | str downcase))
       $title_match or $desc_match
     }
   }
@@ -715,7 +733,7 @@ export def "bitbucket pr list" [
     $search_filtered
   } else {
     $search_filtered | where {|pr|
-      $pr.source.branch.name | str lowercase | str contains ($source | str lowercase)
+      $pr.source.branch.name | str downcase | str contains ($source | str downcase)
     }
   }
 
@@ -724,20 +742,39 @@ export def "bitbucket pr list" [
     $source_filtered
   } else {
     $source_filtered | where {|pr|
-      $pr.destination.branch.name | str lowercase | str contains ($destination | str lowercase)
+      $pr.destination.branch.name | str downcase | str contains ($destination | str downcase)
     }
   }
 
   $filtered | each {|pr|
-    {
+    let row = {
       id: $pr.id,
       title: $pr.title,
       state: $pr.state,
       author: $pr.author.display_name,
       source: $pr.source.branch.name,
       destination: $pr.destination.branch.name,
-      created_on: $pr.created_on
+      created_on: $pr.created_on,
+      updated_on: $pr.updated_on
     }
+    if $approvals {
+      let reviewers = (bitbucket-pr-reviewers $pr)
+      $row | insert reviewers $reviewers | insert my_approved (
+        $pr.participants? | default [] | any {|p| $p.user.uuid == $me_uuid and $p.approved }
+      )
+    } else { $row }
+  }
+}
+
+# Current Bitbucket user's UUID (from the API token's account)
+def get-bitbucket-user-uuid []: nothing -> string {
+  http get "https://api.bitbucket.org/2.0/user" --headers (get-bitbucket-headers) | get uuid
+}
+
+# Reviewer approval summary from a PR record that includes `participants`
+def bitbucket-pr-reviewers [pr: record]: nothing -> table {
+  $pr.participants? | default [] | where role == "REVIEWER" | each {|p|
+    { name: $p.user.display_name, approved: $p.approved, state: $p.state? }
   }
 }
 
@@ -749,7 +786,7 @@ export def "bitbucket pr list" [
 # "returned nothing" when it actually succeeded). Pass --full for the raw record.
 #
 # Example:
-#   bitbucket pr view 123                 # curated summary (title/state/author/branches/description/url)
+#   bitbucket pr view 123                 # curated summary (title/state/author/branches/reviewers/description/url)
 #   bitbucket pr view 123 | get title     # Get just the title
 #   bitbucket pr view 123 --full          # full raw record
 #   bitbucket pr view 123 --full | get links.html.href
@@ -772,6 +809,8 @@ export def "bitbucket pr view" [
       source: $pr.source.branch.name,
       destination: $pr.destination.branch.name,
       created_on: $pr.created_on,
+      updated_on: $pr.updated_on,
+      reviewers: (bitbucket-pr-reviewers $pr),
       description: $pr.description,
       url: $pr.links.html.href
     }
